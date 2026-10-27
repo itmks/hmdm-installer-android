@@ -177,11 +177,35 @@ class AdbController(context: Context, private val log: (String) -> Unit) {
                 }
             }
             os.flush()
-            return readAll(stream.openInputStream())
+            // Jangan tunggu EOF: sebagian device tidak menutup stream setelah selesai.
+            // Baca sampai "Success"/"Failure" muncul lalu berhenti.
+            return readUntilResult(stream.openInputStream())
         } finally {
             watchdog.interrupt()
             try { stream.close() } catch (_: Throwable) { }
         }
+    }
+
+    private fun readUntilResult(input: InputStream): String {
+        val bos = ByteArrayOutputStream()
+        val buf = ByteArray(4096)
+        while (true) {
+            val n = try { input.read(buf) } catch (e: java.io.IOException) {
+                if (bos.size() > 0) break else throw e
+            }
+            if (n < 0) break
+            bos.write(buf, 0, n)
+            val text = bos.toString("UTF-8")
+            if (text.contains("Success", ignoreCase = true) ||
+                text.contains("Failure", ignoreCase = true) ||
+                text.contains("Exception")
+            ) {
+                // Beri waktu singkat bila ada baris lanjutan (mis. detail Failure).
+                if (text.trimEnd().endsWith("]") || text.contains("Success", ignoreCase = true)) break
+                if (text.contains('\n')) break
+            }
+        }
+        return bos.toString("UTF-8")
     }
 
     private fun readAll(input: InputStream): String {

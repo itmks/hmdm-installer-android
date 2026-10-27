@@ -3,6 +3,7 @@ package co.sat.hmdminstaller
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.res.ColorStateList
 import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
@@ -241,7 +242,7 @@ class MainActivity : AppCompatActivity() {
         val addr = connectedAddr
         val on = addr != null && adb.isConnected
         txtConn.text = if (on) "Terhubung · $addr" else "Belum terhubung · Pair lalu Connect untuk mulai"
-        statusDot.setBackgroundColor(if (on) Color.rgb(74, 222, 128) else Color.rgb(100, 116, 139))
+        statusDot.backgroundTintList = ColorStateList.valueOf(if (on) Color.rgb(74, 222, 128) else Color.rgb(148, 163, 184))
         fun mark(done: Boolean, label: String) = (if (done) "✓ " else "○ ") + label
         txtSteps.text = listOf(
             mark(paired || on, "Pair"),
@@ -257,12 +258,13 @@ class MainActivity : AppCompatActivity() {
             val cb = CheckBox(this)
             cb.text = "%02d  %s  ·  %s".format(i + 1, item.name, item.sizeText)
             cb.textSize = 14f
+            cb.setPadding(cb.paddingLeft, (8 * resources.displayMetrics.density).toInt(), cb.paddingRight, (8 * resources.displayMetrics.density).toInt())
             cb.isChecked = item in checked
             cb.setOnCheckedChangeListener { _, isChecked -> if (isChecked) checked.add(item) else checked.remove(item) }
             apkList.addView(cb)
         }
         txtApkEmpty.visibility = if (apks.isEmpty()) View.VISIBLE else View.GONE
-        txtApkTitle.text = if (apks.isEmpty()) "3 · Daftar APK" else "3 · Daftar APK (${apks.size})"
+        txtApkTitle.text = if (apks.isEmpty()) "Daftar APK" else "Daftar APK (${apks.size})"
         refreshHeader()
     }
 

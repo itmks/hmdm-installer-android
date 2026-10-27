@@ -154,7 +154,7 @@
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="10dp"
+                        android:layout_marginTop="8dp"
                         android:orientation="horizontal">
 
                         <com.google.android.material.textfield.TextInputLayout
@@ -171,7 +171,10 @@
                                 android:layout_height="wrap_content"
                                 android:fontFamily="monospace"
                                 android:inputType="text"
-                                android:textSize="14sp"
+                                android:minHeight="0dp"
+                                android:paddingTop="9dp"
+                                android:paddingBottom="9dp"
+                                android:textSize="13sp"
                                 android:singleLine="true" />
                         </com.google.android.material.textfield.TextInputLayout>
 
@@ -188,7 +191,10 @@
                                 android:layout_height="wrap_content"
                                 android:fontFamily="monospace"
                                 android:inputType="number"
-                                android:textSize="14sp"
+                                android:minHeight="0dp"
+                                android:paddingTop="9dp"
+                                android:paddingBottom="9dp"
+                                android:textSize="13sp"
                                 android:singleLine="true" />
                         </com.google.android.material.textfield.TextInputLayout>
                     </LinearLayout>
@@ -214,14 +220,19 @@
                                 android:layout_height="wrap_content"
                                 android:fontFamily="monospace"
                                 android:inputType="number"
-                                android:textSize="14sp"
+                                android:minHeight="0dp"
+                                android:paddingTop="9dp"
+                                android:paddingBottom="9dp"
+                                android:textSize="13sp"
                                 android:singleLine="true" />
                         </com.google.android.material.textfield.TextInputLayout>
 
                         <com.google.android.material.button.MaterialButton
                             android:id="@+id/btnPair"
                             android:layout_width="0dp"
-                            android:layout_height="48dp"
+                            android:layout_height="38dp"
+                            android:minHeight="0dp"
+                            android:textSize="13sp"
                             android:layout_weight="1"
                             android:text="Pair" />
                     </LinearLayout>
@@ -274,7 +285,7 @@
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="10dp"
+                        android:layout_marginTop="8dp"
                         android:orientation="horizontal">
 
                         <com.google.android.material.textfield.TextInputLayout
@@ -291,7 +302,10 @@
                                 android:layout_height="wrap_content"
                                 android:fontFamily="monospace"
                                 android:inputType="text"
-                                android:textSize="14sp"
+                                android:minHeight="0dp"
+                                android:paddingTop="9dp"
+                                android:paddingBottom="9dp"
+                                android:textSize="13sp"
                                 android:singleLine="true" />
                         </com.google.android.material.textfield.TextInputLayout>
 
@@ -308,7 +322,10 @@
                                 android:layout_height="wrap_content"
                                 android:fontFamily="monospace"
                                 android:inputType="number"
-                                android:textSize="14sp"
+                                android:minHeight="0dp"
+                                android:paddingTop="9dp"
+                                android:paddingBottom="9dp"
+                                android:textSize="13sp"
                                 android:singleLine="true" />
                         </com.google.android.material.textfield.TextInputLayout>
                     </LinearLayout>
@@ -316,14 +333,16 @@
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="12dp"
+                        android:layout_marginTop="8dp"
                         android:orientation="horizontal">
 
                         <com.google.android.material.button.MaterialButton
                             android:id="@+id/btnDisconnect"
                             style="@style/Widget.Hmdm.Button.Outlined"
                             android:layout_width="0dp"
-                            android:layout_height="wrap_content"
+                            android:layout_height="36dp"
+                            android:minHeight="0dp"
+                            android:textSize="13sp"
                             android:layout_marginEnd="8dp"
                             android:layout_weight="1"
                             android:text="Disconnect" />
@@ -331,7 +350,9 @@
                         <com.google.android.material.button.MaterialButton
                             android:id="@+id/btnConnect"
                             android:layout_width="0dp"
-                            android:layout_height="wrap_content"
+                            android:layout_height="36dp"
+                            android:minHeight="0dp"
+                            android:textSize="13sp"
                             android:layout_weight="1"
                             android:text="Connect" />
                     </LinearLayout>
@@ -404,9 +425,11 @@
                     <com.google.android.material.button.MaterialButton
                         android:id="@+id/btnAddApk"
                         android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
+                        android:layout_height="36dp"
                         android:layout_marginTop="12dp"
-                        android:text="+ Tambah APK" />
+                        android:text="+ Tambah APK" 
+                            android:minHeight="0dp"
+                            android:textSize="13sp" />
 
                     <LinearLayout
                         android:layout_width="match_parent"
@@ -418,18 +441,22 @@
                             android:id="@+id/btnRemoveApk"
                             style="@style/Widget.Hmdm.Button.Danger"
                             android:layout_width="0dp"
-                            android:layout_height="wrap_content"
+                            android:layout_height="36dp"
                             android:layout_marginEnd="8dp"
                             android:layout_weight="1"
-                            android:text="Hapus" />
+                            android:text="Hapus" 
+                            android:minHeight="0dp"
+                            android:textSize="13sp" />
 
                         <com.google.android.material.button.MaterialButton
                             android:id="@+id/btnClearApk"
                             style="@style/Widget.Hmdm.Button.Outlined"
                             android:layout_width="0dp"
-                            android:layout_height="wrap_content"
+                            android:layout_height="36dp"
                             android:layout_weight="1"
-                            android:text="Kosongkan" />
+                            android:text="Kosongkan" 
+                            android:minHeight="0dp"
+                            android:textSize="13sp" />
                     </LinearLayout>
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
@@ -475,27 +502,32 @@
                             android:id="@+id/btnInstallOnly"
                             style="@style/Widget.Hmdm.Button.Outlined"
                             android:layout_width="0dp"
-                            android:layout_height="wrap_content"
+                            android:layout_height="36dp"
                             android:layout_marginEnd="8dp"
                             android:layout_weight="1"
-                            android:text="Install Semua APK" />
+                            android:text="Install Semua APK" 
+                            android:minHeight="0dp"
+                            android:textSize="13sp" />
 
                         <com.google.android.material.button.MaterialButton
                             android:id="@+id/btnOwner"
                             style="@style/Widget.Hmdm.Button.Outlined"
                             android:layout_width="0dp"
-                            android:layout_height="wrap_content"
+                            android:layout_height="36dp"
                             android:layout_weight="1"
-                            android:text="Set Device Owner" />
+                            android:text="Set Device Owner" 
+                            android:minHeight="0dp"
+                            android:textSize="13sp" />
                     </LinearLayout>
 
                     <com.google.android.material.button.MaterialButton
                         android:id="@+id/btnAll"
                         android:layout_width="match_parent"
-                        android:layout_height="46dp"
+                        android:layout_height="36dp"
                         android:layout_marginTop="8dp"
-                        android:text="Jalankan Semua"
-                        android:textSize="14sp" />
+                        android:text="Jalankan Semua" 
+                            android:minHeight="0dp"
+                            android:textSize="13sp" />
 
                     <TextView
                         android:layout_width="match_parent"
@@ -540,17 +572,21 @@
                     android:id="@+id/btnCopyLog"
                     style="@style/Widget.Hmdm.Button.Text"
                     android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
+                    android:layout_height="36dp"
                     android:minWidth="0dp"
-                    android:text="Salin" />
+                    android:text="Salin" 
+                            android:minHeight="0dp"
+                            android:textSize="13sp" />
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/btnClearLog"
                     style="@style/Widget.Hmdm.Button.Text"
                     android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
+                    android:layout_height="36dp"
                     android:minWidth="0dp"
-                    android:text="Bersihkan" />
+                    android:text="Bersihkan" 
+                            android:minHeight="0dp"
+                            android:textSize="13sp" />
             </LinearLayout>
 
             <ScrollView

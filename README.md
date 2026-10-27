@@ -15,7 +15,7 @@ buka tab Actions › "Build APK" › Run workflow, lalu unduh artifact `HMDM-Ins
 1. Pasang APK ini di HP teknisi (izinkan "install dari sumber tidak dikenal").
 2. HP target: Opsi Developer › Wireless debugging (satu Wi-Fi dengan HP teknisi) › "Pair device with pairing code".
 3. Isi IP, Port pairing, kode › **Pair**. Lalu isi IP + Port connect (layar utama Wireless debugging) › **Connect**.
-4. Daftar APK sudah berisi `hmdm-6.39-master.apk`; tambah APK lain dengan "+ Tambah APK".
+4. Daftar APK awalnya kosong: tambahkan `hmdm.apk` (dan APK lain) dengan "+ Tambah APK".
 5. **Install Semua APK**, **Set Device Owner**, atau **Jalankan Semua**.
 
 Syarat device owner: HP target baru / habis factory reset dan belum ada akun (Google dll).

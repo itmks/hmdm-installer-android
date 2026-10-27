@@ -64,12 +64,22 @@ class AdbController(context: Context, private val log: (String) -> Unit) {
                 Thread.sleep(1500)
             }
             log("> adb connect $addr")
+            // Putuskan koneksi lama dulu: library langsung return true bila masih terhubung
+            // ke device lain, sehingga IP yang tidak ada pun tampak "berhasil".
+            try { manager.disconnect() } catch (_: Throwable) { }
             try {
-                manager.connect(host, port)
-                ok = manager.isConnected
-                if (ok) log("connected to $addr") else log("Connect gagal: tidak terhubung")
+                val connected = manager.connect(host, port)
+                // Verifikasi nyata: jalankan perintah di device tujuan.
+                ok = connected && manager.isConnected && shell("echo hmdm-ok").contains("hmdm-ok")
+                if (ok) {
+                    log("connected to $addr")
+                } else {
+                    log("Connect gagal: tidak terhubung / device tidak merespons")
+                    try { manager.disconnect() } catch (_: Throwable) { }
+                }
             } catch (e: Throwable) {
                 log("Connect gagal: ${e.message ?: e.javaClass.simpleName}")
+                try { manager.disconnect() } catch (_: Throwable) { }
             }
         }
         return ok

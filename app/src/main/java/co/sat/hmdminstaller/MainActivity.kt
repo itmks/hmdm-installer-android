@@ -189,7 +189,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun doConnect(addr: String): Boolean {
         val ok = adb.connect(addr)
-        connectedAddr = if (ok) addr else connectedAddr
+        connectedAddr = if (ok) addr else null
         runOnUiThread { refreshHeader() }
         return ok
     }

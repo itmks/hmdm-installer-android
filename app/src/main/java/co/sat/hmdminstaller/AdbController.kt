@@ -69,7 +69,6 @@ class AdbController(context: Context, private val log: (String) -> Unit) {
             if (isConnected) { try { manager.disconnect() } catch (_: Throwable) { } }
             try {
                 val connected = manager.connect(host, port)
-                log("[debug] connect()=$connected isConnected=${manager.isConnected}")
                 if (!connected || !manager.isConnected) {
                     log("Connect gagal: tidak terhubung")
                 } else {

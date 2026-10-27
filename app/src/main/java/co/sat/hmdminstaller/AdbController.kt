@@ -66,19 +66,23 @@ class AdbController(context: Context, private val log: (String) -> Unit) {
             log("> adb connect $addr")
             // Putuskan koneksi lama dulu: library langsung return true bila masih terhubung
             // ke device lain, sehingga IP yang tidak ada pun tampak "berhasil".
-            try { manager.disconnect() } catch (_: Throwable) { }
+            if (isConnected) { try { manager.disconnect() } catch (_: Throwable) { } }
             try {
                 val connected = manager.connect(host, port)
-                // Verifikasi nyata: jalankan perintah di device tujuan.
-                ok = connected && manager.isConnected && shell("echo hmdm-ok").contains("hmdm-ok")
-                if (ok) {
-                    log("connected to $addr")
+                log("[debug] connect()=$connected isConnected=${manager.isConnected}")
+                if (!connected || !manager.isConnected) {
+                    log("Connect gagal: tidak terhubung")
                 } else {
-                    log("Connect gagal: tidak terhubung / device tidak merespons")
-                    try { manager.disconnect() } catch (_: Throwable) { }
+                    // Verifikasi nyata: jalankan perintah di device tujuan.
+                    val out = try { shell("echo hmdm-ok") } catch (e: Throwable) {
+                        log("Verifikasi gagal: ${e.javaClass.simpleName}: ${e.message}"); ""
+                    }
+                    ok = out.contains("hmdm-ok")
+                    if (ok) log("connected to $addr") else log("Connect gagal: device tidak merespons")
                 }
+                if (!ok) { try { manager.disconnect() } catch (_: Throwable) { } }
             } catch (e: Throwable) {
-                log("Connect gagal: ${e.message ?: e.javaClass.simpleName}")
+                log("Connect gagal: ${e.javaClass.simpleName}: ${e.message}")
                 try { manager.disconnect() } catch (_: Throwable) { }
             }
         }

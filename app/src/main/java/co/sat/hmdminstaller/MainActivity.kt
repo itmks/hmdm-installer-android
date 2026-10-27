@@ -103,9 +103,6 @@ class MainActivity : AppCompatActivity() {
         // Log (UI thread) → controller memakai callback ini dari thread kerja.
         adb = AdbController(this) { line -> runOnUiThread { log(line) } }
 
-        // APK HMDM bawaan (dari assets) masuk daftar otomatis.
-        addBuiltInApk()
-
         btnPair.setOnClickListener {
             val addr = addr(edtPairIp.text.toString(), edtPairPort.text.toString())
             val code = clean(edtPairCode.text.toString())
@@ -305,17 +302,6 @@ class MainActivity : AppCompatActivity() {
             ip = ip.substring(0, i)
         }
         return if (ip.isEmpty() || port.isEmpty()) "" else "$ip:$port"
-    }
-
-    private fun addBuiltInApk() {
-        try {
-            val out = File(cacheDir, "builtin/hmdm-6.39-master.apk")
-            out.parentFile?.mkdirs()
-            assets.open("hmdm.apk").use { i -> out.outputStream().use { o -> i.copyTo(o) } }
-            apks.add(ApkItem("hmdm-6.39-master.apk", out, builtIn = true))
-        } catch (e: Exception) {
-            log("PERINGATAN: APK bawaan tidak bisa dimuat: ${e.message}")
-        }
     }
 
     private fun copyToCache(uri: Uri): ApkItem? {

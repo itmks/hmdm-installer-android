@@ -4,6 +4,12 @@ import android.content.Context
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
+import java.net.InetSocketAddress
+import java.net.Socket
+import java.util.concurrent.Callable
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 
 /** Satu APK di daftar: file hasil pilihan user (disalin ke cache). */
 data class ApkItem(val name: String, val file: File, val builtIn: Boolean = false) {
@@ -68,7 +74,14 @@ class AdbController(context: Context, private val log: (String) -> Unit) {
             // ke device lain, sehingga IP yang tidak ada pun tampak "berhasil".
             if (isConnected) { try { manager.disconnect() } catch (_: Throwable) { } }
             try {
-                val connected = manager.connect(host, port)
+                // Cek cepat: IP/port tidak terjangkau -> gagal dalam 3 detik (bukan menunggu lama).
+                try {
+                    Socket().use { it.connect(InetSocketAddress(host, port), 3000) }
+                } catch (e: Throwable) {
+                    log("Connect gagal: $addr tidak terjangkau (${e.javaClass.simpleName})")
+                    return false
+                }
+                val connected = connectWithTimeout(host, port, 10)
                 if (!connected || !manager.isConnected) {
                     log("Connect gagal: tidak terhubung")
                 } else {
@@ -161,6 +174,23 @@ class AdbController(context: Context, private val log: (String) -> Unit) {
         if (isConnected) return true
         log("Belum terhubung ke device. Klik Connect terlebih dahulu.")
         return false
+    }
+
+    /** manager.connect() bisa menggantung (mis. menunggu dialog di HP); batasi waktunya. */
+    private fun connectWithTimeout(host: String, port: Int, seconds: Long): Boolean {
+        val ex = Executors.newSingleThreadExecutor { r -> Thread(r).apply { isDaemon = true } }
+        val f = ex.submit(Callable { manager.connect(host, port) })
+        return try {
+            f.get(seconds, TimeUnit.SECONDS)
+        } catch (e: TimeoutException) {
+            f.cancel(true)
+            try { manager.disconnect() } catch (_: Throwable) { }
+            throw RuntimeException("timeout ${seconds}s (cek Wireless debugging & dialog di HP)")
+        } catch (e: java.util.concurrent.ExecutionException) {
+            throw e.cause ?: e
+        } finally {
+            ex.shutdownNow()
+        }
     }
 
     private fun shell(cmd: String): String {

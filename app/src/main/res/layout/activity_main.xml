@@ -512,7 +512,10 @@
                             android:layout_weight="1"
                             android:text="Install Semua APK" 
                             android:minHeight="0dp"
-                            android:textSize="13sp" />
+                            android:autoSizeMaxTextSize="13sp"
+                            android:autoSizeMinTextSize="9sp"
+                            android:autoSizeTextType="uniform"
+                            android:maxLines="1" />
 
                         <com.google.android.material.button.MaterialButton
                             android:id="@+id/btnOwner"
@@ -522,7 +525,10 @@
                             android:layout_weight="1"
                             android:text="Set Device Owner" 
                             android:minHeight="0dp"
-                            android:textSize="13sp" />
+                            android:autoSizeMaxTextSize="13sp"
+                            android:autoSizeMinTextSize="9sp"
+                            android:autoSizeTextType="uniform"
+                            android:maxLines="1" />
                     </LinearLayout>
 
                     <com.google.android.material.button.MaterialButton

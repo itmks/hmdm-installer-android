@@ -35,7 +35,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var txtLog: TextView
     private lateinit var logScroll: ScrollView
     private lateinit var txtConn: TextView
-    private lateinit var txtSteps: TextView
     private lateinit var txtStatus: TextView
     private lateinit var txtApkTitle: TextView
     private lateinit var txtApkEmpty: TextView
@@ -78,7 +77,6 @@ class MainActivity : AppCompatActivity() {
         txtLog = findViewById(R.id.txtLog)
         logScroll = findViewById(R.id.logScroll)
         txtConn = findViewById(R.id.txtConn)
-        txtSteps = findViewById(R.id.txtSteps)
         txtStatus = findViewById(R.id.txtStatus)
         txtApkTitle = findViewById(R.id.txtApkTitle)
         txtApkEmpty = findViewById(R.id.txtApkEmpty)
@@ -240,13 +238,6 @@ class MainActivity : AppCompatActivity() {
         val on = addr != null && adb.isConnected
         txtConn.text = if (on) "Terhubung · $addr" else "Belum terhubung · Pair lalu Connect untuk mulai"
         statusDot.backgroundTintList = ColorStateList.valueOf(if (on) Color.rgb(74, 222, 128) else Color.rgb(148, 163, 184))
-        fun mark(done: Boolean, label: String) = (if (done) "✓ " else "○ ") + label
-        txtSteps.text = listOf(
-            mark(paired || on, "Pair"),
-            mark(on, "Connect"),
-            mark(apks.isNotEmpty(), "APK"),
-            mark(ownerDone, "Jalankan")
-        ).joinToString("   ")
     }
 
     private fun refreshApkList() {

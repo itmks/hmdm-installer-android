@@ -16,7 +16,7 @@ jobs:
           gradle-version: 8.7
       - name: Build debug APK
         run: gradle :app:assembleDebug --no-daemon
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: HMDM-Installer-apk
           path: app/build/outputs/apk/debug/*.apk

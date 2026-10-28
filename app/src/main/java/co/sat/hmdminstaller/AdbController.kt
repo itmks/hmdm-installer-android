@@ -37,6 +37,7 @@ class AdbController(context: Context, private val log: (String) -> Unit) {
 
     private val appContext = context.applicationContext
     @Volatile private var manager = AdbManager(appContext)
+    @Volatile private var lastAddr: String? = null
 
     val isConnected: Boolean
         get() = try { manager.isConnected } catch (_: Throwable) { false }
@@ -93,7 +94,7 @@ class AdbController(context: Context, private val log: (String) -> Unit) {
                         log("Verifikasi gagal: ${e.javaClass.simpleName}: ${e.message}"); ""
                     }
                     ok = out.contains("hmdm-ok")
-                    if (ok) log("connected to $addr") else log("Connect gagal: device tidak merespons")
+                    if (ok) { lastAddr = addr; log("connected to $addr") } else log("Connect gagal: device tidak merespons")
                 }
                 if (!ok) safeDisconnect()
             } catch (e: Throwable) {
@@ -106,6 +107,7 @@ class AdbController(context: Context, private val log: (String) -> Unit) {
 
     fun disconnect(): Boolean {
         log("> adb disconnect")
+        lastAddr = null
         safeDisconnect()
         log("disconnected")
         return true
@@ -168,11 +170,22 @@ class AdbController(context: Context, private val log: (String) -> Unit) {
 
     // ---------- internal ----------
 
+    /** Cek koneksi benar-benar hidup; kalau putus, sambung ulang otomatis ke alamat terakhir. */
     private fun ensureConnected(): Boolean {
-        if (isConnected) return true
-        log("Belum terhubung ke device. Klik Connect terlebih dahulu.")
+        if (isConnected && probe()) return true
+        val addr = lastAddr
+        if (addr == null) {
+            log("Belum terhubung ke device. Klik Connect terlebih dahulu.")
+            return false
+        }
+        log("Koneksi terputus, menyambung ulang ke $addr...")
+        if (connect(addr)) return true
+        log("Sambung ulang gagal. Cek Wireless debugging di HP lalu klik Connect.")
         return false
     }
+
+    private fun probe(): Boolean =
+        try { shell("echo hmdm-ok", 8).contains("hmdm-ok") } catch (_: Throwable) { false }
 
     /**
      * Jalankan [block] di thread daemon dengan batas waktu keras. I/O socket yang macet tidak

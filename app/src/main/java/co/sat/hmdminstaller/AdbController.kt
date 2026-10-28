@@ -43,18 +43,20 @@ class AdbController(context: Context, private val log: (String) -> Unit) {
      * ringan dengan batas waktu; sekaligus menjaga TCP tetap aktif.
      */
     fun isAlive(timeoutMs: Long = 5000): Boolean {
-        if (!isConnected) return false
+        if (!isConnected) { probeError = "isConnected=false"; return false }
         var ok = false
+        var err: String? = null
         val t = Thread {
-            ok = try { shell("echo ok").contains("ok") } catch (_: Throwable) { false }
+            try { ok = shell("echo ok").contains("ok") }
+            catch (e: Throwable) { err = "${e.javaClass.simpleName}: ${e.message}" }
         }.apply { isDaemon = true; start() }
         t.join(timeoutMs)
-        if (t.isAlive) { // macet = socket mati
-            try { manager.disconnect() } catch (_: Throwable) { }
-            return false
-        }
+        if (t.isAlive) { probeError = "timeout"; return false }
+        probeError = if (ok) null else (err ?: "balasan kosong")
         return ok
     }
+
+    @Volatile private var probeError: String? = null
 
     /** Sambung ulang ke alamat terakhir. Port Wireless debugging berubah bila fitur dimatikan/dinyalakan. */
     fun reconnect(): Boolean {
@@ -69,9 +71,14 @@ class AdbController(context: Context, private val log: (String) -> Unit) {
 
     /** Dipanggil berkala: jaga koneksi, sambung ulang bila putus. true = terhubung. */
     fun keepAlive(): Boolean {
-        if (isAlive()) return true
+        // Hanya sambung ulang bila koneksi memang putus. Tes `echo` hanya diagnosa:
+        // bila gagal padahal masih terhubung, jangan memutus koneksi yang mungkin sehat.
+        if (isConnected) {
+            if (!isAlive()) log("Peringatan: tes koneksi gagal (${probeError}), koneksi dibiarkan.")
+            return true
+        }
         if (lastHost == null) return false
-        log("Koneksi ke $lastHost:$lastPort terputus, mencoba sambung ulang...")
+        log("Koneksi ke $lastHost:$lastPort terputus (${probeError}), mencoba sambung ulang...")
         for (i in 1..3) {
             if (reconnect()) { log("connected to $lastHost:$lastPort (tersambung ulang)"); return true }
             Thread.sleep(1500)

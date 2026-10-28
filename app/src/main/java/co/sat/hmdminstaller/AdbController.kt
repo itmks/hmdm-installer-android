@@ -7,6 +7,7 @@ import java.io.InputStream
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.concurrent.Callable
+import java.util.concurrent.ExecutionException
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
@@ -34,7 +35,8 @@ class AdbController(context: Context, private val log: (String) -> Unit) {
         const val OWNER_COMPONENT = "com.hmdm.launcher/.AdminReceiver"
     }
 
-    private val manager = AdbManager(context.applicationContext)
+    private val appContext = context.applicationContext
+    @Volatile private var manager = AdbManager(appContext)
 
     val isConnected: Boolean
         get() = try { manager.isConnected } catch (_: Throwable) { false }
@@ -47,7 +49,8 @@ class AdbController(context: Context, private val log: (String) -> Unit) {
         val (host, port) = split(addr) ?: run { log("Alamat pairing tidak valid: $addr"); return false }
         log("> adb pair $addr ******")
         return try {
-            manager.pair(host, port, code)
+            val m = manager
+            callWithTimeout(25, "pairing") { m.pair(host, port, code) }
             log("Successfully paired to $addr")
             true
         } catch (e: Throwable) {
@@ -72,7 +75,7 @@ class AdbController(context: Context, private val log: (String) -> Unit) {
             log("> adb connect $addr")
             // Putuskan koneksi lama dulu: library langsung return true bila masih terhubung
             // ke device lain, sehingga IP yang tidak ada pun tampak "berhasil".
-            if (isConnected) { try { manager.disconnect() } catch (_: Throwable) { } }
+            safeDisconnect()
             try {
                 // Cek cepat: IP/port tidak terjangkau -> gagal dalam 3 detik (bukan menunggu lama).
                 try {
@@ -92,10 +95,10 @@ class AdbController(context: Context, private val log: (String) -> Unit) {
                     ok = out.contains("hmdm-ok")
                     if (ok) log("connected to $addr") else log("Connect gagal: device tidak merespons")
                 }
-                if (!ok) { try { manager.disconnect() } catch (_: Throwable) { } }
+                if (!ok) safeDisconnect()
             } catch (e: Throwable) {
                 log("Connect gagal: ${e.javaClass.simpleName}: ${e.message}")
-                try { manager.disconnect() } catch (_: Throwable) { }
+                safeDisconnect()
             }
         }
         return ok
@@ -103,14 +106,9 @@ class AdbController(context: Context, private val log: (String) -> Unit) {
 
     fun disconnect(): Boolean {
         log("> adb disconnect")
-        return try {
-            manager.disconnect()
-            log("disconnected")
-            true
-        } catch (e: Throwable) {
-            log("Disconnect error: ${e.message ?: e.javaClass.simpleName}")
-            false
-        }
+        safeDisconnect()
+        log("disconnected")
+        return true
     }
 
     /** Pasang semua APK berurutan; yang gagal tidak menghentikan yang lain. */
@@ -176,29 +174,55 @@ class AdbController(context: Context, private val log: (String) -> Unit) {
         return false
     }
 
-    /** manager.connect() bisa menggantung (mis. menunggu dialog di HP); batasi waktunya. */
-    private fun connectWithTimeout(host: String, port: Int, seconds: Long): Boolean {
+    /**
+     * Jalankan [block] di thread daemon dengan batas waktu keras. I/O socket yang macet tidak
+     * bisa di-interrupt, jadi bila timeout kita tinggalkan thread-nya dan panggil pemanggil dengan error.
+     */
+    private fun <T> callWithTimeout(seconds: Long, what: String, block: () -> T): T {
         val ex = Executors.newSingleThreadExecutor { r -> Thread(r).apply { isDaemon = true } }
-        val f = ex.submit(Callable { manager.connect(host, port) })
-        return try {
-            f.get(seconds, TimeUnit.SECONDS)
+        val f = ex.submit(Callable { block() })
+        try {
+            return f.get(seconds, TimeUnit.SECONDS)
         } catch (e: TimeoutException) {
             f.cancel(true)
-            try { manager.disconnect() } catch (_: Throwable) { }
-            throw RuntimeException("timeout ${seconds}s (cek Wireless debugging & dialog di HP)")
-        } catch (e: java.util.concurrent.ExecutionException) {
+            abandonManager()
+            throw RuntimeException("$what timeout ${seconds}s (cek Wireless debugging & dialog di HP)")
+        } catch (e: ExecutionException) {
             throw e.cause ?: e
         } finally {
             ex.shutdownNow()
         }
     }
 
-    private fun shell(cmd: String): String {
-        val stream = manager.openStream("shell:$cmd")
-        try {
-            return readAll(stream.openInputStream())
-        } finally {
-            try { stream.close() } catch (_: Throwable) { }
+    /** Buang koneksi yang macet (ditutup di thread terpisah) dan pakai manager baru. */
+    private fun abandonManager() {
+        val old = manager
+        manager = AdbManager(appContext)
+        Thread { try { old.close() } catch (_: Throwable) { } }.apply { isDaemon = true }.start()
+    }
+
+    /** Disconnect yang tidak pernah menggantung: maksimal 3 detik, lalu manager diganti. */
+    private fun safeDisconnect() {
+        val m = manager
+        val t = Thread { try { m.disconnect() } catch (_: Throwable) { } }.apply { isDaemon = true; start() }
+        t.join(3000)
+        if (t.isAlive) abandonManager()
+    }
+
+    private fun connectWithTimeout(host: String, port: Int, seconds: Long): Boolean {
+        val m = manager
+        return callWithTimeout(seconds, "connect") { m.connect(host, port) }
+    }
+
+    private fun shell(cmd: String, seconds: Long = 20): String {
+        val m = manager
+        return callWithTimeout(seconds, "shell") {
+            val stream = m.openStream("shell:$cmd")
+            try {
+                readAll(stream.openInputStream())
+            } finally {
+                try { stream.close() } catch (_: Throwable) { }
+            }
         }
     }
 

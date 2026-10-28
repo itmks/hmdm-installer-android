@@ -43,7 +43,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var apkList: LinearLayout
     private lateinit var buttons: List<MaterialButton>
 
-    private val worker = Executors.newSingleThreadExecutor()
+    private var worker = Executors.newSingleThreadExecutor()
+    private val uiHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var runId = 0
     private val apks = mutableListOf<ApkItem>()
     private val checked = mutableSetOf<ApkItem>()
     private lateinit var adb: AdbController
@@ -133,7 +135,7 @@ class MainActivity : AppCompatActivity() {
         }
         btnInstallOnly.setOnClickListener {
             val list = apks.toList()
-            run("Install APK") { adb.install(list) }
+            run("Install APK", 0) { adb.install(list) }
         }
         btnOwner.setOnClickListener {
             run("Set Device Owner") { doSetOwner() }
@@ -143,7 +145,7 @@ class MainActivity : AppCompatActivity() {
             val pCode = clean(edtPairCode.text.toString())
             val cAddr = addr(edtConnIp.text.toString(), edtConnPort.text.toString())
             val list = apks.toList()
-            run("Jalankan semua") {
+            run("Jalankan semua", 0) {
                 if (pAddr.isNotEmpty() && pCode.isNotEmpty()) {
                     if (!doPair(pAddr, pCode)) return@run false
                 } else {
@@ -174,7 +176,8 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        worker.shutdown()
+        uiHandler.removeCallbacksAndMessages(null)
+        worker.shutdownNow()
     }
 
     // ---------- Langkah (jalan di thread kerja) ----------
@@ -206,16 +209,37 @@ class MainActivity : AppCompatActivity() {
         return ok
     }
 
-    private fun run(title: String, work: () -> Boolean) {
+    /**
+     * [timeoutSec] = batas waktu keras satu operasi (0 = tanpa batas, mis. install banyak APK).
+     * Bila lewat, UI dilepas dan thread kerja yang macet ditinggalkan agar tombol tidak terkunci.
+     */
+    private fun run(title: String, timeoutSec: Long = 60, work: () -> Boolean) {
         if (busy) return
         busy = true
+        val id = ++runId
         setBusy(true, "Sedang berjalan: $title...")
+        if (timeoutSec > 0) {
+            uiHandler.postDelayed({
+                if (busy && runId == id) {
+                    runId++ // hasil thread lama diabaikan
+                    log("ERROR: $title tidak merespons (timeout ${timeoutSec}s). Dihentikan.")
+                    log("=== GAGAL / BERHENTI ===")
+                    log("")
+                    worker.shutdownNow()
+                    worker = Executors.newSingleThreadExecutor()
+                    busy = false
+                    setBusy(false, "Gagal / berhenti: $title (timeout)")
+                    refreshHeader()
+                }
+            }, timeoutSec * 1000)
+        }
         worker.execute {
             var ok = false
             try { ok = work() } catch (e: Throwable) {
-                runOnUiThread { log("ERROR: ${e.message ?: e.javaClass.simpleName}") }
+                runOnUiThread { if (runId == id) log("ERROR: ${e.message ?: e.javaClass.simpleName}") }
             }
             runOnUiThread {
+                if (runId != id) return@runOnUiThread // sudah di-timeout
                 log(if (ok) "=== SELESAI: BERHASIL ===" else "=== GAGAL / BERHENTI ===")
                 log("")
                 busy = false

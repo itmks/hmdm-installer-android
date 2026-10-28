@@ -28,6 +28,10 @@ syarat di atas terpenuhi.
 - Install = `cmd package install -r -S <ukuran>` lewat stream `exec:` (setara `adb install -r`).
 - Package id `co.sat.hmdminstaller`, minSdk 28 (Android 9+), build debug.
 
+- Koneksi dijaga: foreground service (`KeepAliveService`) + keepalive `echo` tiap 15 dtk + reconnect otomatis
+  ke alamat connect terakhir, sehingga koneksi tidak putus walau aplikasi lama di background.
+  Reconnect hanya berhasil bila port Wireless debugging di HP target tidak berubah.
+
 ## PENTING: belum pernah dikompilasi
 Proyek ini ditulis tanpa akses Android SDK/Maven, jadi belum dikompilasi atau diuji di perangkat.
 Kemungkinan perlu penyesuaian kecil, terutama di `AdbManager.kt` / `AdbController.kt`

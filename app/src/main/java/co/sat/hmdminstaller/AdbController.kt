@@ -1,11 +1,12 @@
 package co.sat.hmdminstaller
 
 import android.content.Context
-import android.content.Intent
-import androidx.core.content.ContextCompat
+import android.util.Log
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
+import java.util.concurrent.Callable
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
@@ -33,99 +34,120 @@ class AdbController(context: Context) {
 
     companion object {
         const val OWNER_COMPONENT = "com.hmdm.launcher/.AdminReceiver"
-        private const val KEEPALIVE_SEC = 15L
-        private const val PROBE_TIMEOUT_SEC = 6L
+        private const val TAG = "AdbController"
+        private const val KEEPALIVE_SECONDS = 15L
+        private const val PROBE_TIMEOUT_SECONDS = 6L
+        private const val MAX_BACKLOG = 200
     }
 
     private val appCtx = context.applicationContext
     private val manager = AdbManager(appCtx)
-    private val prefs = appCtx.getSharedPreferences("adb", Context.MODE_PRIVATE)
 
-    /** Diisi Activity (bisa diganti/dikosongkan saat Activity dibuat/dihancurkan). */
-    @Volatile var log: (String) -> Unit = {}
-    /** Dipanggil saat status koneksi berubah (mis. putus sendiri / tersambung ulang). */
-    @Volatile var onStateChanged: () -> Unit = {}
-
-    /** Alamat connect terakhir yang berhasil; disimpan agar bisa disambung ulang otomatis. */
-    @Volatile var lastAddr: String? = prefs.getString("last_addr", null)
-        private set
-    @Volatile var currentAddr: String? = null
-        private set
-
-    /** Satu operasi ADB pada satu waktu; keepalive mengalah bila operasi sedang jalan. */
+    /** Mencegah keepalive/reconnect bentrok dengan operasi user (pair, install, dll). */
     private val opLock = ReentrantLock()
     private val probeExec = Executors.newCachedThreadPool { r -> Thread(r).apply { isDaemon = true } }
     private var keepAlive: ScheduledExecutorService? = null
 
+    /** Alamat connect terakhir yang berhasil; dipakai untuk reconnect otomatis. */
+    @Volatile var lastAddr: String? = null
+        private set
+    @Volatile private var wantConnected = false
+    @Volatile private var reconnectFailed = false
+
+    // ---- log: controller hidup lebih lama dari Activity, jadi log ditampung saat UI tidak ada ----
+    @Volatile private var sink: ((String) -> Unit)? = null
+    @Volatile private var stateListener: (() -> Unit)? = null
+    private val backlog = ConcurrentLinkedQueue<String>()
+
+    fun attach(logSink: (String) -> Unit, onState: () -> Unit) {
+        sink = logSink
+        stateListener = onState
+        while (true) logSink(backlog.poll() ?: break)
+    }
+
+    fun detach() {
+        sink = null
+        stateListener = null
+    }
+
+    private fun log(line: String) {
+        Log.d(TAG, line)
+        val s = sink
+        if (s != null) s(line) else {
+            backlog.add(line)
+            while (backlog.size > MAX_BACKLOG) backlog.poll()
+        }
+    }
+
+    private fun notifyState() { stateListener?.invoke() }
+
     val isConnected: Boolean
         get() = try { manager.isConnected } catch (_: Throwable) { false }
 
-    fun pair(addr: String, code: String): Boolean {
+    fun pair(addr: String, code: String): Boolean = withLock {
         if (addr.isEmpty() || code.isEmpty()) {
             log("Isi IP dan Port pairing dan kode pairing terlebih dahulu.")
-            return false
+            return@withLock false
         }
-        val (host, port) = split(addr) ?: run { log("Alamat pairing tidak valid: $addr"); return false }
+        val (host, port) = split(addr) ?: run { log("Alamat pairing tidak valid: $addr"); return@withLock false }
         log("> adb pair $addr ******")
-        return locked {
-            try {
-                manager.pair(host, port, code)
-                log("Successfully paired to $addr")
-                true
-            } catch (e: Throwable) {
-                log("Pairing gagal: ${e.message ?: e.javaClass.simpleName}")
-                false
-            }
+        try {
+            manager.pair(host, port, code)
+            log("Successfully paired to $addr")
+            true
+        } catch (e: Throwable) {
+            log("Pairing gagal: ${e.message ?: e.javaClass.simpleName}")
+            false
         }
     }
 
-    fun connect(addr: String): Boolean {
+    fun connect(addr: String): Boolean = withLock {
         if (addr.isEmpty()) {
             log("Isi IP dan Port connect terlebih dahulu.")
-            return false
+            return@withLock false
         }
-        val (host, port) = split(addr) ?: run { log("Alamat connect tidak valid: $addr"); return false }
-        return locked {
-            var ok = false
-            for (attempt in 1..2) {
-                if (ok) break
-                if (attempt > 1) {
-                    log("Connect gagal, mencoba lagi (1x)...")
-                    Thread.sleep(1500)
-                }
-                log("> adb connect $addr")
-                ok = rawConnect(host, port)
-                if (ok) log("connected to $addr")
+        if (split(addr) == null) { log("Alamat connect tidak valid: $addr"); return@withLock false }
+        var ok = false
+        for (attempt in 1..2) {
+            if (ok) break
+            if (attempt > 1) {
+                log("Connect gagal, mencoba lagi (1x)...")
+                Thread.sleep(1500)
             }
-            if (ok) onConnected(addr)
-            ok
+            log("> adb connect $addr")
+            ok = connectOnce(addr)
         }
+        if (ok) {
+            lastAddr = addr
+            wantConnected = true
+            reconnectFailed = false
+            startKeepAlive()
+            KeepAliveService.start(appCtx)
+        }
+        ok
     }
 
-    fun disconnect(): Boolean {
+    fun disconnect(): Boolean = withLock {
         log("> adb disconnect")
+        wantConnected = false
         stopKeepAlive()
-        currentAddr = null
-        return locked {
-            try {
-                manager.disconnect()
-                log("disconnected")
-                true
-            } catch (e: Throwable) {
-                log("Disconnect error: ${e.message ?: e.javaClass.simpleName}")
-                false
-            }
+        KeepAliveService.stop(appCtx)
+        try {
+            manager.disconnect()
+            log("disconnected")
+            true
+        } catch (e: Throwable) {
+            log("Disconnect error: ${e.message ?: e.javaClass.simpleName}")
+            false
         }
     }
 
     /** Pasang semua APK berurutan; yang gagal tidak menghentikan yang lain. */
-    fun install(apks: List<ApkItem>): Boolean = locked { installLocked(apks) }
-
-    private fun installLocked(apks: List<ApkItem>): Boolean {
-        if (!ensureConnected()) return false
+    fun install(apks: List<ApkItem>): Boolean = withLock {
+        if (!ensureConnected()) return@withLock false
         if (apks.isEmpty()) {
             log("Daftar APK kosong. Tambahkan APK terlebih dahulu.")
-            return false
+            return@withLock false
         }
         var ok = 0
         val failed = StringBuilder()
@@ -149,15 +171,13 @@ class AdbController(context: Context) {
         if (failed.isNotEmpty()) {
             log("Yang gagal:")
             log(failed.toString().trimEnd())
-            return false
+            return@withLock false
         }
-        return true
+        true
     }
 
-    fun setDeviceOwner(): Boolean = locked { setDeviceOwnerLocked() }
-
-    private fun setDeviceOwnerLocked(): Boolean {
-        if (!ensureConnected()) return false
+    fun setDeviceOwner(): Boolean = withLock {
+        if (!ensureConnected()) return@withLock false
         log("> adb shell dpm set-device-owner $OWNER_COMPONENT")
         val out = try { shell("dpm set-device-owner $OWNER_COMPONENT") } catch (e: Throwable) {
             "Error: ${e.message ?: e.javaClass.simpleName}"
@@ -165,135 +185,112 @@ class AdbController(context: Context) {
         out.lines().filter { it.isNotBlank() }.forEach { log(it.trim()) }
         if (!out.contains("Success", ignoreCase = true)) {
             log("Set device owner gagal. Pastikan device baru di-reset dan belum ada akun (Google/lainnya).")
-            return false
+            return@withLock false
         }
-        return true
+        true
     }
 
-    fun installAndOwner(apks: List<ApkItem>): Boolean {
+    fun installAndOwner(apks: List<ApkItem>): Boolean = withLock {
         // Walau sebagian APK gagal, tetap coba set device owner (HMDM mungkin sudah terpasang).
         val installOk = install(apks)
         val ownerOk = setDeviceOwner()
-        return installOk && ownerOk
+        installOk && ownerOk
     }
 
     // ---------- internal ----------
 
-    /**
-     * Pastikan koneksi benar-benar hidup (bukan sekadar socket yang tampak terbuka),
-     * dan sambung ulang otomatis ke alamat terakhir bila sudah putus.
-     */
-    private fun ensureConnected(): Boolean {
-        if (isConnected && probe()) return true
-        val addr = currentAddr ?: lastAddr
-        if (addr == null) {
-            log("Belum terhubung ke device. Klik Connect terlebih dahulu.")
-            return false
-        }
-        log("Koneksi terputus. Menyambung ulang ke $addr ...")
-        if (reconnect(addr)) return true
-        log("Gagal menyambung ulang. Pastikan Wireless debugging di HP target masih aktif lalu klik Connect " +
-            "(port bisa berubah setiap Wireless debugging dimatikan/dihidupkan).")
-        return false
-    }
-
-    private fun rawConnect(host: String, port: Int): Boolean = try {
-        try { manager.disconnect() } catch (_: Throwable) { }
-        manager.connect(host, port)
-        manager.isConnected.also { if (!it) log("Connect gagal: tidak terhubung") }
-    } catch (e: Throwable) {
-        log("Connect gagal: ${e.message ?: e.javaClass.simpleName}")
-        false
-    }
-
-    private fun reconnect(addr: String): Boolean {
+    /** Satu kali percobaan connect (tanpa log "> adb connect"). Membersihkan koneksi basi dulu. */
+    private fun connectOnce(addr: String): Boolean {
         val (host, port) = split(addr) ?: return false
-        for (attempt in 1..3) {
-            if (rawConnect(host, port)) {
-                log("connected to $addr")
-                onConnected(addr)
-                return true
-            }
-            if (attempt < 3) Thread.sleep(2000L * attempt)
+        return try {
+            try { if (manager.isConnected) manager.disconnect() } catch (_: Throwable) { }
+            manager.connect(host, port)
+            val ok = manager.isConnected
+            if (ok) log("connected to $addr") else log("Connect gagal: tidak terhubung")
+            ok
+        } catch (e: Throwable) {
+            log("Connect gagal: ${e.message ?: e.javaClass.simpleName}")
+            false
         }
-        currentAddr = null
-        stopKeepAlive()
-        onStateChanged()
-        return false
     }
 
-    /** Uji koneksi dengan perintah ringan; socket setengah-mati tidak akan menjawab. */
+    /**
+     * Cek koneksi benar-benar hidup: `isConnected` hanya melihat soket lokal, tidak tahu kalau
+     * HP target sudah menutup sesi (mis. HP tidur / Wi-Fi putus). Jadi kirim `echo` sungguhan.
+     */
     private fun probe(): Boolean {
-        val f = probeExec.submit<Boolean> {
-            val out = shell("echo ok")
-            out.contains("ok")
-        }
+        if (!isConnected) return false
+        val f = probeExec.submit(Callable {
+            val s = manager.openStream("shell:echo ok")
+            try { readAll(s.openInputStream()).contains("ok") } finally { try { s.close() } catch (_: Throwable) { } }
+        })
         return try {
-            f.get(PROBE_TIMEOUT_SEC, TimeUnit.SECONDS)
+            f.get(PROBE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
         } catch (_: TimeoutException) {
             f.cancel(true)
-            try { manager.disconnect() } catch (_: Throwable) { }
+            try { manager.disconnect() } catch (_: Throwable) { }  // bebaskan thread yang menggantung
             false
         } catch (_: Throwable) {
             false
         }
     }
 
-    private fun onConnected(addr: String) {
-        currentAddr = addr
-        lastAddr = addr
-        prefs.edit().putString("last_addr", addr).apply()
-        startKeepAlive()
-        onStateChanged()
-    }
-
-    // ---------- keepalive ----------
-
     private fun startKeepAlive() {
         if (keepAlive != null) return
-        ContextCompat.startForegroundService(appCtx, Intent(appCtx, AdbService::class.java))
-        keepAlive = Executors.newSingleThreadScheduledExecutor { r -> Thread(r).apply { isDaemon = true } }.also { ex ->
-            ex.scheduleWithFixedDelay({
-                if (!opLock.tryLock()) return@scheduleWithFixedDelay   // sedang ada operasi lain
-                try {
-                    val addr = currentAddr ?: return@scheduleWithFixedDelay
-                    if (!(isConnected && probe())) {
-                        log("Koneksi ADB terputus, menyambung ulang otomatis...")
-                        onStateChanged()
-                        if (reconnect(addr)) log("Tersambung kembali ke $addr")
-                        else log("Gagal menyambung ulang. Klik Connect (cek port Wireless debugging).")
-                    }
-                } catch (_: Throwable) {
-                } finally {
-                    opLock.unlock()
-                }
-            }, KEEPALIVE_SEC, KEEPALIVE_SEC, TimeUnit.SECONDS)
+        keepAlive = Executors.newSingleThreadScheduledExecutor { r -> Thread(r).apply { isDaemon = true } }.also {
+            it.scheduleWithFixedDelay({ keepAliveTick() }, KEEPALIVE_SECONDS, KEEPALIVE_SECONDS, TimeUnit.SECONDS)
         }
     }
 
     private fun stopKeepAlive() {
         keepAlive?.shutdownNow()
         keepAlive = null
-        appCtx.stopService(Intent(appCtx, AdbService::class.java))
     }
 
-    /** Dipanggil saat app kembali ke depan: periksa koneksi, sambung ulang bila putus. */
-    fun checkNow() {
-        val addr = currentAddr ?: return
-        if (!opLock.tryLock()) return
+    private fun keepAliveTick() {
         try {
-            if (!(isConnected && probe())) {
-                log("Koneksi ADB terputus selama app tidak dipakai. Menyambung ulang...")
-                if (reconnect(addr)) log("Tersambung kembali ke $addr")
-                else log("Gagal menyambung ulang. Klik Connect (cek port Wireless debugging).")
+            val addr = lastAddr
+            if (!wantConnected || addr == null) return
+            if (!opLock.tryLock()) return          // user sedang menjalankan operasi: jangan ganggu
+            try {
+                if (probe()) {
+                    if (reconnectFailed) { reconnectFailed = false; notifyState() }
+                    return
+                }
+                if (!reconnectFailed) {
+                    log("Koneksi ADB terputus, menyambung ulang ke $addr ...")
+                    notifyState()
+                }
+                if (connectOnce(addr)) {
+                    reconnectFailed = false
+                    log("Tersambung kembali ke $addr")
+                } else if (!reconnectFailed) {
+                    reconnectFailed = true
+                    log("Reconnect gagal. Pastikan Wireless debugging di HP target masih ON dan Wi-Fi sama. " +
+                        "Jika port berubah, isi port baru lalu klik Connect.")
+                }
+                notifyState()
+            } finally {
+                opLock.unlock()
             }
-        } finally {
-            opLock.unlock()
-            onStateChanged()
+        } catch (e: Throwable) {
+            Log.w(TAG, "keepalive error", e)
         }
     }
 
-    private inline fun <T> locked(block: () -> T): T {
+    private fun ensureConnected(): Boolean {
+        if (probe()) return true
+        val addr = lastAddr
+        if (wantConnected && addr != null) {
+            log("Koneksi terputus, menyambung ulang ke $addr ...")
+            if (connectOnce(addr)) { notifyState(); return true }
+            notifyState()
+        }
+        log("Belum terhubung ke device. Klik Connect terlebih dahulu.")
+        return false
+    }
+
+    private inline fun <T> withLock(block: () -> T): T {
         opLock.lock()
         try { return block() } finally { opLock.unlock() }
     }

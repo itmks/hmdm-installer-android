@@ -6,12 +6,14 @@ import java.security.Security
 
 class App : Application() {
 
-    /** Satu controller untuk seluruh proses, agar koneksi ADB tidak ikut hilang bila Activity dibuat ulang. */
-    val adb: AdbController by lazy { AdbController(this) }
+    /** Satu controller untuk seluruh umur proses, supaya koneksi ADB tidak ikut hilang bersama Activity. */
+    lateinit var adb: AdbController
+        private set
 
     override fun onCreate() {
         super.onCreate()
         // Wireless debugging memakai TLS 1.3; Conscrypt dibutuhkan oleh libadb-android.
         Security.insertProviderAt(Conscrypt.newProvider(), 1)
+        adb = AdbController(this)
     }
 }

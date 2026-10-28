@@ -37,6 +37,7 @@ class AdbController(context: Context) {
         private const val TAG = "AdbController"
         private const val KEEPALIVE_SECONDS = 15L
         private const val PROBE_TIMEOUT_SECONDS = 6L
+        private const val CONNECT_TIMEOUT_SECONDS = 15L
         private const val MAX_BACKLOG = 200
     }
 
@@ -91,17 +92,33 @@ class AdbController(context: Context) {
         }
         val (host, port) = split(addr) ?: run { log("Alamat pairing tidak valid: $addr"); return@withLock false }
         log("> adb pair $addr ******")
+        val f = probeExec.submit(Callable { manager.pair(host, port, code) })
         try {
-            manager.pair(host, port, code)
+            f.get(30, TimeUnit.SECONDS)
             log("Successfully paired to $addr")
             true
+        } catch (_: TimeoutException) {
+            f.cancel(true)
+            log("Pairing gagal: timeout. Cek IP/port pairing dan kodenya (kode berubah tiap dialog dibuka ulang).")
+            false
+        } catch (e: java.util.concurrent.ExecutionException) {
+            val c = e.cause ?: e
+            log("Pairing gagal: ${c.message ?: c.javaClass.simpleName}")
+            false
         } catch (e: Throwable) {
             log("Pairing gagal: ${e.message ?: e.javaClass.simpleName}")
             false
         }
     }
 
-    fun connect(addr: String): Boolean = withLock {
+    fun connect(addr: String): Boolean {
+        // Hentikan keepalive dulu agar tidak memegang kunci / ikut menyambung saat user menekan Connect.
+        wantConnected = false
+        stopKeepAlive()
+        return connectLocked(addr)
+    }
+
+    private fun connectLocked(addr: String): Boolean = withLock {
         if (addr.isEmpty()) {
             log("Isi IP dan Port connect terlebih dahulu.")
             return@withLock false
@@ -127,10 +144,14 @@ class AdbController(context: Context) {
         ok
     }
 
-    fun disconnect(): Boolean = withLock {
-        log("> adb disconnect")
+    fun disconnect(): Boolean {
         wantConnected = false
         stopKeepAlive()
+        return disconnectLocked()
+    }
+
+    private fun disconnectLocked(): Boolean = withLock {
+        log("> adb disconnect")
         KeepAliveService.stop(appCtx)
         try {
             manager.disconnect()
@@ -202,12 +223,26 @@ class AdbController(context: Context) {
     /** Satu kali percobaan connect (tanpa log "> adb connect"). Membersihkan koneksi basi dulu. */
     private fun connectOnce(addr: String): Boolean {
         val (host, port) = split(addr) ?: return false
-        return try {
-            try { if (manager.isConnected) manager.disconnect() } catch (_: Throwable) { }
+        try { if (manager.isConnected) manager.disconnect() } catch (_: Throwable) { }
+        // libadb-android bisa menunggu tanpa batas bila HP target tidak membalas (port berubah,
+        // sesi lama menggantung). Jalankan di thread lain dengan batas waktu supaya tidak "loading" terus.
+        val f = probeExec.submit(Callable {
             manager.connect(host, port)
-            val ok = manager.isConnected
+            manager.isConnected
+        })
+        return try {
+            val ok = f.get(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
             if (ok) log("connected to $addr") else log("Connect gagal: tidak terhubung")
             ok
+        } catch (_: TimeoutException) {
+            f.cancel(true)
+            try { manager.disconnect() } catch (_: Throwable) { }
+            log("Connect gagal: timeout ${CONNECT_TIMEOUT_SECONDS}s. Cek IP/port connect (port berubah tiap Wireless debugging dinyalakan ulang).")
+            false
+        } catch (e: java.util.concurrent.ExecutionException) {
+            val c = e.cause ?: e
+            log("Connect gagal: ${c.message ?: c.javaClass.simpleName}")
+            false
         } catch (e: Throwable) {
             log("Connect gagal: ${e.message ?: e.javaClass.simpleName}")
             false

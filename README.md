@@ -22,6 +22,9 @@ Syarat device owner: HP target baru / habis factory reset dan belum ada akun (Go
 Satu HP tidak bisa memasang dirinya sendiri sebagai device owner dengan cara ini kecuali IP diisi 127.0.0.1 dan
 syarat di atas terpenuhi.
 
+## Deteksi jaringan putus
+Saat install (dan sebelum set device owner) aplikasi memeriksa koneksi: probe `echo` ke device sebelum tiap APK, lalu selama upload dipantau tiap detik (ADB terputus, Wi-Fi HP hilang, atau upload macet 20 detik). Bila terjadi, install dihentikan, log merah "JARINGAN PUTUS: ...", status header jadi "Terputus", dan APK sisa ditandai belum dipasang.
+
 ## Catatan teknis
 - ADB memakai library [libadb-android](https://github.com/MuntashirAkon/libadb-android) (JitPack) + Conscrypt (TLS 1.3).
 - Kunci/sertifikat ADB dibuat sekali (`AdbManager.kt`) dan disimpan; pairing terikat pada kunci ini.

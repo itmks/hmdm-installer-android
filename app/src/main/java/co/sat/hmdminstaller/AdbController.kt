@@ -1,9 +1,14 @@
 package co.sat.hmdminstaller
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 
 /** Satu APK di daftar: file hasil pilihan user (disalin ke cache). */
 data class ApkItem(val name: String, val file: File, val builtIn: Boolean = false) {
@@ -26,9 +31,45 @@ class AdbController(context: Context, private val log: (String) -> Unit) {
 
     companion object {
         const val OWNER_COMPONENT = "com.hmdm.launcher/.AdminReceiver"
+        /** Upload APK dianggap macet (jaringan putus) bila tidak ada byte terkirim selama ini. */
+        private const val STALL_MS = 20_000L
+        private const val INSTALL_TIMEOUT_MS = 300_000L
     }
 
+    /** Dilempar saat jaringan / koneksi ADB putus di tengah operasi. */
+    private class NetworkLostException(message: String) : Exception(message)
+
     private val manager = AdbManager(context.applicationContext)
+    private val cm = context.applicationContext
+        .getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+
+    /** True bila operasi terakhir dihentikan karena jaringan/koneksi putus. */
+    @Volatile var networkLost = false
+        private set
+
+    /** Wi-Fi / Ethernet aktif di HP ini? (Hotspot tanpa Wi-Fi klien akan terbaca false; itu wajar.) */
+    private fun wifiUp(): Boolean = try {
+        val net = cm.activeNetwork
+        val caps = if (net != null) cm.getNetworkCapabilities(net) else null
+        caps != null && (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET))
+    } catch (_: Throwable) { false }
+
+    /**
+     * Pemeriksaan sebelum operasi: flag koneksi + `echo` ke device.
+     * Mengembalikan alasan bila putus, atau null bila sehat.
+     */
+    private fun checkLink(): String? {
+        if (!isConnected) return "koneksi ADB ke device sudah terputus"
+        if (!probe()) return "device tidak merespons (jaringan Wi-Fi putus / Wireless debugging mati)"
+        return null
+    }
+
+    private fun markLost(reason: String) {
+        networkLost = true
+        log("JARINGAN PUTUS: $reason.")
+        try { manager.disconnect() } catch (_: Throwable) { }
+    }
 
     val isConnected: Boolean
         get() = try { manager.isConnected } catch (_: Throwable) { false }
@@ -78,6 +119,7 @@ class AdbController(context: Context, private val log: (String) -> Unit) {
             return false
         }
         val (host, port) = split(addr) ?: run { log("Alamat connect tidak valid: $addr"); return false }
+        networkLost = false
         var ok = false
         for (attempt in 1..2) {
             if (ok) break
@@ -111,24 +153,47 @@ class AdbController(context: Context, private val log: (String) -> Unit) {
 
     /** Pasang semua APK berurutan; yang gagal tidak menghentikan yang lain. */
     fun install(apks: List<ApkItem>): Boolean {
+        networkLost = false
         if (!ensureConnected()) return false
         if (apks.isEmpty()) {
             log("Daftar APK kosong. Tambahkan APK terlebih dahulu.")
             return false
         }
+        log("Memeriksa jaringan / koneksi ke device...")
+        val firstCheck = checkLink()
+        if (firstCheck != null) { markLost(firstCheck); return false }
+        log("Jaringan OK.")
         var ok = 0
         val failed = StringBuilder()
-        apks.forEachIndexed { i, apk ->
+        for ((i, apk) in apks.withIndex()) {
             log("")
             log("[${i + 1}/${apks.size}] ${apk.name}")
             if (!apk.file.exists()) {
                 log("File tidak ditemukan: ${apk.file}")
                 failed.appendLine("  - ${apk.name} (file tidak ditemukan)")
-                return@forEachIndexed
+                continue
+            }
+            if (i > 0) {
+                val why = checkLink()
+                if (why != null) {
+                    markLost(why)
+                    for (rest in apks.drop(i)) failed.appendLine("  - ${rest.name} (jaringan putus, belum dipasang)")
+                    break
+                }
             }
             log("> adb install -r ${apk.name}")
-            val out = try { installOne(apk.file) } catch (e: Throwable) {
+            var lostMsg: String? = null
+            val out = try { installOne(apk.file) } catch (e: NetworkLostException) {
+                lostMsg = e.message ?: "jaringan putus"
+                ""
+            } catch (e: Throwable) {
                 "Error: ${e.message ?: e.javaClass.simpleName}"
+            }
+            if (lostMsg != null) {
+                markLost(lostMsg)
+                failed.appendLine("  - ${apk.name} (jaringan putus saat install)")
+                for (rest in apks.drop(i + 1)) failed.appendLine("  - ${rest.name} (jaringan putus, belum dipasang)")
+                break
             }
             out.lines().filter { it.isNotBlank() }.forEach { log(it.trim()) }
             if (out.contains("Success", ignoreCase = true)) ok++ else failed.appendLine("  - ${apk.name}")
@@ -145,6 +210,9 @@ class AdbController(context: Context, private val log: (String) -> Unit) {
 
     fun setDeviceOwner(): Boolean {
         if (!ensureConnected()) return false
+        networkLost = false
+        val why = checkLink()
+        if (why != null) { markLost(why); return false }
         log("> adb shell dpm set-device-owner $OWNER_COMPONENT")
         val out = try { shell("dpm set-device-owner $OWNER_COMPONENT") } catch (e: Throwable) {
             "Error: ${e.message ?: e.javaClass.simpleName}"
@@ -160,6 +228,10 @@ class AdbController(context: Context, private val log: (String) -> Unit) {
     fun installAndOwner(apks: List<ApkItem>): Boolean {
         // Walau sebagian APK gagal, tetap coba set device owner (HMDM mungkin sudah terpasang).
         val installOk = install(apks)
+        if (networkLost) {
+            log("Set device owner dilewati: jaringan putus. Connect ulang lalu jalankan lagi.")
+            return false
+        }
         val ownerOk = setDeviceOwner()
         return installOk && ownerOk
     }
@@ -181,12 +253,38 @@ class AdbController(context: Context, private val log: (String) -> Unit) {
         }
     }
 
-    /** Setara `adb install -r`: stream APK ke `cmd package install -S <ukuran>` lewat service exec. */
+    /**
+     * Setara `adb install -r`: stream APK ke `cmd package install -S <ukuran>` lewat service exec.
+     * Selama berjalan, thread pemantau memeriksa tiap detik: koneksi ADB masih hidup, Wi-Fi tidak hilang,
+     * dan upload tidak macet. Bila salah satu terjadi, stream ditutup dan NetworkLostException dilempar.
+     */
     private fun installOne(file: File): String {
         val stream = manager.openStream("exec:cmd package install -r -S ${file.length()}")
-        // Pengaman: tutup stream bila tidak selesai dalam 5 menit.
-        val watchdog = Thread {
-            try { Thread.sleep(300_000); stream.close() } catch (_: InterruptedException) { } catch (_: Throwable) { }
+        val startedOnWifi = wifiUp()
+        val startedAt = System.currentTimeMillis()
+        val lastProgress = AtomicLong(startedAt)
+        val uploading = AtomicBoolean(true)
+        val lostReason = AtomicReference<String?>(null)
+        val monitor = Thread {
+            try {
+                while (true) {
+                    Thread.sleep(1_000)
+                    val now = System.currentTimeMillis()
+                    val reason = when {
+                        !isConnected -> "koneksi ADB ke device terputus"
+                        startedOnWifi && !wifiUp() -> "Wi-Fi HP ini terputus"
+                        uploading.get() && now - lastProgress.get() > STALL_MS ->
+                            "upload macet ${STALL_MS / 1000} detik tanpa data (jaringan putus / sangat lemah)"
+                        now - startedAt > INSTALL_TIMEOUT_MS -> "timeout install ${INSTALL_TIMEOUT_MS / 60_000} menit"
+                        else -> null
+                    }
+                    if (reason != null) {
+                        lostReason.set(reason)
+                        try { stream.close() } catch (_: Throwable) { }
+                        return@Thread
+                    }
+                }
+            } catch (_: InterruptedException) { }
         }.apply { isDaemon = true; start() }
         try {
             val os = stream.openOutputStream()
@@ -196,12 +294,21 @@ class AdbController(context: Context, private val log: (String) -> Unit) {
                     val n = input.read(buf)
                     if (n < 0) break
                     os.write(buf, 0, n)
+                    lastProgress.set(System.currentTimeMillis())
                 }
             }
             os.flush()
-            return readAll(stream.openInputStream())
+            uploading.set(false)
+            val out = readAll(stream.openInputStream())
+            lostReason.get()?.let { throw NetworkLostException(it) }
+            return out
+        } catch (e: NetworkLostException) {
+            throw e
+        } catch (e: Throwable) {
+            // Stream ditutup pemantau, atau socket putus sendiri (IOException / reset / timeout).
+            throw NetworkLostException(lostReason.get() ?: "koneksi ke device putus (${e.message ?: e.javaClass.simpleName})")
         } finally {
-            watchdog.interrupt()
+            monitor.interrupt()
             try { stream.close() } catch (_: Throwable) { }
         }
     }

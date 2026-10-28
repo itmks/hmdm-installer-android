@@ -285,7 +285,17 @@ class MainActivity : AppCompatActivity() {
                 log(if (ok) "=== SELESAI: BERHASIL ===" else "=== GAGAL / BERHENTI ===")
                 log("")
                 busy = false
-                setBusy(false, if (ok) "Selesai: $title" else "Gagal / berhenti: $title (lihat log)")
+                // Jaringan putus di tengah operasi: sinkronkan status header (jadi "Terputus").
+                val prev = connectedAddr
+                if (prev != null && !adb.isConnected) {
+                    lostAddr = prev; connectedAddr = null; connectedSince = 0L
+                }
+                val status = when {
+                    ok -> "Selesai: $title"
+                    adb.networkLost -> "Jaringan putus saat: $title. Periksa Wi-Fi, lalu Connect ulang."
+                    else -> "Gagal / berhenti: $title (lihat log)"
+                }
+                setBusy(false, status)
                 refreshHeader()
             }
         }
@@ -354,7 +364,7 @@ class MainActivity : AppCompatActivity() {
             l.startsWith("ringkasan") -> Color.WHITE
             l.startsWith("peringatan") -> Color.rgb(251, 191, 36)
             l.contains("sudah ada") || l.contains("dilewati") -> Color.rgb(251, 191, 36)
-            l.contains("fail") || l.contains("gagal") || l.contains("error") || l.contains("cannot") ||
+            l.contains("jaringan putus") || l.contains("fail") || l.contains("gagal") || l.contains("error") || l.contains("cannot") ||
                 l.contains("tidak ditemukan") || l.contains("timeout") -> Color.rgb(248, 113, 113)
             l.contains("success") || l.contains("berhasil") || l.contains("connected to") ||
                 l.contains("paired") -> Color.rgb(74, 222, 128)

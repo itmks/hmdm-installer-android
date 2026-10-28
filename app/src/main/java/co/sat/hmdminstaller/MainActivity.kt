@@ -48,7 +48,6 @@ class MainActivity : AppCompatActivity() {
     private val checked = mutableSetOf<ApkItem>()
     private lateinit var adb: AdbController
     @Volatile private var busy = false
-    private var connectedAddr: String? = null
 
     private val pickApks = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         if (uris.isNullOrEmpty()) return@registerForActivityResult
@@ -97,7 +96,14 @@ class MainActivity : AppCompatActivity() {
             btnClearApk, btnInstallOnly, btnOwner, btnAll)
 
         // Log (UI thread) → controller memakai callback ini dari thread kerja.
-        adb = AdbController(this) { line -> runOnUiThread { log(line) } }
+        adb = (application as App).adb
+        adb.log = { line -> runOnUiThread { log(line) } }
+        adb.onStateChanged = { runOnUiThread { refreshHeader() } }
+        adb.lastAddr?.let { last ->
+            val i = last.lastIndexOf(':')
+            if (i > 0) { edtConnIp.setText(last.substring(0, i)); edtConnPort.setText(last.substring(i + 1)) }
+        }
+        requestKeepAlivePermissions()
 
         btnPair.setOnClickListener {
             val addr = addr(edtPairIp.text.toString(), edtPairPort.text.toString())
@@ -168,9 +174,38 @@ class MainActivity : AppCompatActivity() {
         log("Isi IP dan Port lalu klik tombol.")
     }
 
+    override fun onResume() {
+        super.onResume()
+        refreshHeader()
+        // Setelah lama di background: cek koneksi sungguhan (jangan percaya status lama).
+        if (!busy) worker.execute { adb.checkNow() }
+    }
+
     override fun onDestroy() {
+        // Controller hidup di level aplikasi; lepas callback ke Activity yang sudah mati.
+        adb.log = {}
+        adb.onStateChanged = {}
         super.onDestroy()
         worker.shutdown()
+    }
+
+    /** Izin notifikasi (Android 13+) untuk service penjaga koneksi, dan bebas dari penghematan baterai. */
+    private fun requestKeepAlivePermissions() {
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 100)
+        }
+        try {
+            val pm = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+            if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+                startActivity(
+                    android.content.Intent(
+                        android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                        Uri.parse("package:$packageName")
+                    )
+                )
+            }
+        } catch (_: Throwable) { }
     }
 
     // ---------- Langkah (jalan di thread kerja) ----------
@@ -183,14 +218,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun doConnect(addr: String): Boolean {
         val ok = adb.connect(addr)
-        connectedAddr = if (ok) addr else connectedAddr
         runOnUiThread { refreshHeader() }
         return ok
     }
 
     private fun doDisconnect(): Boolean {
         val ok = adb.disconnect()
-        if (ok) connectedAddr = null
         runOnUiThread { refreshHeader() }
         return ok
     }
@@ -229,7 +262,7 @@ class MainActivity : AppCompatActivity() {
     // ---------- UI helper ----------
 
     private fun refreshHeader() {
-        val addr = connectedAddr
+        val addr = adb.currentAddr
         val on = addr != null && adb.isConnected
         txtConn.text = if (on) "Terhubung · $addr" else "Belum terhubung · Pair lalu Connect untuk mulai"
         statusDot.backgroundTintList = ColorStateList.valueOf(if (on) Color.rgb(74, 222, 128) else Color.rgb(148, 163, 184))

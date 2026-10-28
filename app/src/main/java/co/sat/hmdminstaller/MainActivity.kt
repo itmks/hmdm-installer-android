@@ -151,12 +151,26 @@ class MainActivity : AppCompatActivity() {
             val cAddr = addr(edtConnIp.text.toString(), edtConnPort.text.toString())
             val list = apks.toList()
             run("Jalankan semua") {
-                if (pAddr.isNotEmpty() && pCode.isNotEmpty()) {
-                    if (!doPair(pAddr, pCode)) return@run false
+                if (adb.isConnected && connectedAddr == cAddr) {
+                    runOnUiThread { log("[Pair & Connect] dilewati (sudah terhubung ke $cAddr).") }
                 } else {
-                    log("[Pair] dilewati (IP / Port / kode pairing kosong).")
+                    if (pAddr.isNotEmpty() && pCode.isNotEmpty()) {
+                        if (doPair(pAddr, pCode)) {
+                            // Beri waktu HP target menutup dialog pairing & membuka port connect.
+                            Thread.sleep(1500)
+                        } else {
+                            // Kode pairing sekali pakai: bila HP sudah pernah di-pair, pair ulang pasti gagal.
+                            // Jangan berhenti; coba connect (kunci ADB tersimpan).
+                            runOnUiThread { log("Peringatan: pairing gagal, mencoba lanjut Connect (mungkin sudah pernah di-pair).") }
+                        }
+                    } else {
+                        runOnUiThread { log("[Pair] dilewati (IP / Port / kode pairing kosong).") }
+                    }
+                    if (!doConnect(cAddr)) {
+                        runOnUiThread { log("Connect gagal. Jika belum pernah pair: buka dialog pairing baru di HP target (kode baru), isi ulang, lalu coba lagi.") }
+                        return@run false
+                    }
                 }
-                if (!doConnect(cAddr)) return@run false
                 adb.installAndOwner(list)
             }
         }

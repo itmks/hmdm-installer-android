@@ -33,6 +33,53 @@ class AdbController(context: Context, private val log: (String) -> Unit) {
     val isConnected: Boolean
         get() = try { manager.isConnected } catch (_: Throwable) { false }
 
+    // Alamat connect terakhir yang berhasil, dipakai untuk sambung ulang otomatis.
+    @Volatile private var lastHost: String? = null
+    @Volatile private var lastPort: Int = 0
+
+    /**
+     * Cek koneksi benar-benar hidup (bukan sekadar flag). Koneksi yang diam lama bisa
+     * "setengah putus": isConnected masih true padahal socket sudah mati. Kirim perintah
+     * ringan dengan batas waktu; sekaligus menjaga TCP tetap aktif.
+     */
+    fun isAlive(timeoutMs: Long = 5000): Boolean {
+        if (!isConnected) return false
+        var ok = false
+        val t = Thread {
+            ok = try { shell("echo ok").contains("ok") } catch (_: Throwable) { false }
+        }.apply { isDaemon = true; start() }
+        t.join(timeoutMs)
+        if (t.isAlive) { // macet = socket mati
+            try { manager.disconnect() } catch (_: Throwable) { }
+            return false
+        }
+        return ok
+    }
+
+    /** Sambung ulang ke alamat terakhir. Port Wireless debugging berubah bila fitur dimatikan/dinyalakan. */
+    fun reconnect(): Boolean {
+        val host = lastHost ?: return false
+        val port = lastPort
+        try { manager.disconnect() } catch (_: Throwable) { }
+        return try {
+            manager.connect(host, port)
+            manager.isConnected
+        } catch (_: Throwable) { false }
+    }
+
+    /** Dipanggil berkala: jaga koneksi, sambung ulang bila putus. true = terhubung. */
+    fun keepAlive(): Boolean {
+        if (isAlive()) return true
+        if (lastHost == null) return false
+        log("Koneksi ke $lastHost:$lastPort terputus, mencoba sambung ulang...")
+        for (i in 1..3) {
+            if (reconnect()) { log("connected to $lastHost:$lastPort (tersambung ulang)"); return true }
+            Thread.sleep(1500)
+        }
+        log("Sambung ulang gagal. Cek Wireless debugging masih aktif & port-nya (port berubah tiap diaktifkan ulang), lalu klik Connect.")
+        return false
+    }
+
     fun pair(addr: String, code: String): Boolean {
         if (addr.isEmpty() || code.isEmpty()) {
             log("Isi IP dan Port pairing dan kode pairing terlebih dahulu.")
@@ -67,7 +114,8 @@ class AdbController(context: Context, private val log: (String) -> Unit) {
             try {
                 manager.connect(host, port)
                 ok = manager.isConnected
-                if (ok) log("connected to $addr") else log("Connect gagal: tidak terhubung")
+                if (ok) { lastHost = host; lastPort = port; log("connected to $addr") }
+                else log("Connect gagal: tidak terhubung")
             } catch (e: Throwable) {
                 log("Connect gagal: ${e.message ?: e.javaClass.simpleName}")
             }
@@ -77,6 +125,7 @@ class AdbController(context: Context, private val log: (String) -> Unit) {
 
     fun disconnect(): Boolean {
         log("> adb disconnect")
+        lastHost = null // disconnect manual: jangan sambung ulang otomatis
         return try {
             manager.disconnect()
             log("disconnected")
@@ -145,7 +194,7 @@ class AdbController(context: Context, private val log: (String) -> Unit) {
     // ---------- internal ----------
 
     private fun ensureConnected(): Boolean {
-        if (isConnected) return true
+        if (keepAlive()) return true
         log("Belum terhubung ke device. Klik Connect terlebih dahulu.")
         return false
     }

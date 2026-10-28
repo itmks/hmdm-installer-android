@@ -31,7 +31,6 @@ class AdbManager(context: Context) : AbsAdbConnectionManager() {
 
     init {
         setApi(Build.VERSION.SDK_INT)
-        setTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
         var k: PrivateKey? = null
         var c: Certificate? = null
         try {

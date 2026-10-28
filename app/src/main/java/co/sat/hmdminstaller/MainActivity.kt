@@ -3,12 +3,9 @@ package co.sat.hmdminstaller
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
-import android.Manifest
-import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.graphics.Color
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
 import android.provider.OpenableColumns
 import android.text.SpannableString
@@ -23,11 +20,12 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.content.ContextCompat
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.textfield.TextInputEditText
 import java.io.File
 import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.TimeUnit
 
 class MainActivity : AppCompatActivity() {
 
@@ -50,9 +48,16 @@ class MainActivity : AppCompatActivity() {
     private val worker = Executors.newSingleThreadExecutor()
     private val apks = mutableListOf<ApkItem>()
     private val checked = mutableSetOf<ApkItem>()
-    private val adb: AdbController get() = (application as App).adb
+    private lateinit var adb: AdbController
     @Volatile private var busy = false
-    private val notifPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    @Volatile private var connectedAddr: String? = null
+    private var connectedSince = 0L
+    private var lostAddr: String? = null
+
+    // Pemantau status koneksi (live): jalan hanya saat layar terlihat.
+    private val poller = Executors.newSingleThreadScheduledExecutor()
+    private var pollTask: ScheduledFuture<*>? = null
+    private var lastProbe = 0L
 
     private val pickApks = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         if (uris.isNullOrEmpty()) return@registerForActivityResult
@@ -100,10 +105,8 @@ class MainActivity : AppCompatActivity() {
         buttons = listOf(btnPair, btnConnect, btnDisconnect, btnAddApk, btnRemoveApk,
             btnClearApk, btnInstallOnly, btnOwner, btnAll)
 
-        // Izin notifikasi (Android 13+) agar notifikasi "ADB terhubung" dari foreground service terlihat.
-        if (Build.VERSION.SDK_INT >= 33 &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-        ) notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        // Log (UI thread) → controller memakai callback ini dari thread kerja.
+        adb = AdbController(this) { line -> runOnUiThread { log(line) } }
 
         btnPair.setOnClickListener {
             val addr = addr(edtPairIp.text.toString(), edtPairPort.text.toString())
@@ -176,19 +179,50 @@ class MainActivity : AppCompatActivity() {
 
     override fun onStart() {
         super.onStart()
-        // Controller hidup di Application; Activity hanya menempel selama terlihat.
-        adb.attach({ line -> runOnUiThread { log(line) } }, { runOnUiThread { refreshHeader() } })
-        refreshHeader()
+        pollTask?.cancel(false)
+        pollTask = poller.scheduleWithFixedDelay({ pollConnection() }, 0, 1, TimeUnit.SECONDS)
     }
 
     override fun onStop() {
-        adb.detach()
         super.onStop()
+        pollTask?.cancel(false)
+        pollTask = null
     }
 
     override fun onDestroy() {
         super.onDestroy()
         worker.shutdown()
+        poller.shutdownNow()
+    }
+
+    // ---------- Status koneksi live ----------
+
+    /** Jalan di thread pemantau tiap 1 detik. */
+    private fun pollConnection() {
+        try {
+            val wasBusy = busy
+            var alive = adb.isConnected
+            val now = System.currentTimeMillis()
+            // Probe sungguhan tiap ±8 detik (hanya saat tidak ada operasi lain) untuk mendeteksi koneksi mati diam-diam.
+            if (alive && !wasBusy && now - lastProbe >= 8_000) {
+                lastProbe = now
+                alive = adb.probe()
+            }
+            runOnUiThread { applyLiveState(alive, wasBusy) }
+        } catch (_: Throwable) { }
+    }
+
+    private fun applyLiveState(alive: Boolean, polledWhileBusy: Boolean) {
+        if (isFinishing) return
+        val addr = connectedAddr
+        // Saat operasi berjalan (mis. connect/install) jangan simpulkan putus: hasilnya bisa basi.
+        if (addr != null && !alive && !polledWhileBusy && !busy) {
+            log("Koneksi ke $addr terputus.")
+            lostAddr = addr
+            connectedAddr = null
+            connectedSince = 0L
+        }
+        refreshHeader()
     }
 
     // ---------- Langkah (jalan di thread kerja) ----------
@@ -201,12 +235,19 @@ class MainActivity : AppCompatActivity() {
 
     private fun doConnect(addr: String): Boolean {
         val ok = adb.connect(addr)
+        if (ok) {
+            connectedAddr = addr
+            connectedSince = System.currentTimeMillis()
+            lostAddr = null
+            lastProbe = connectedSince
+        }
         runOnUiThread { refreshHeader() }
         return ok
     }
 
     private fun doDisconnect(): Boolean {
         val ok = adb.disconnect()
+        if (ok) { connectedAddr = null; connectedSince = 0L; lostAddr = null }
         runOnUiThread { refreshHeader() }
         return ok
     }
@@ -245,10 +286,26 @@ class MainActivity : AppCompatActivity() {
     // ---------- UI helper ----------
 
     private fun refreshHeader() {
-        val addr = adb.lastAddr
+        val addr = connectedAddr
+        val lost = lostAddr
         val on = addr != null && adb.isConnected
-        txtConn.text = if (on) "Terhubung · $addr" else "Belum terhubung · Pair lalu Connect untuk mulai"
-        statusDot.backgroundTintList = ColorStateList.valueOf(if (on) Color.rgb(74, 222, 128) else Color.rgb(148, 163, 184))
+        when {
+            on -> {
+                val s = ((System.currentTimeMillis() - connectedSince) / 1000).coerceAtLeast(0)
+                val dur = if (s >= 3600) "%d:%02d:%02d".format(s / 3600, s % 3600 / 60, s % 60)
+                          else "%02d:%02d".format(s / 60, s % 60)
+                txtConn.text = "Terhubung · $addr · $dur"
+                statusDot.backgroundTintList = ColorStateList.valueOf(Color.rgb(74, 222, 128))
+            }
+            lost != null -> {
+                txtConn.text = "Terputus · $lost · Connect ulang"
+                statusDot.backgroundTintList = ColorStateList.valueOf(Color.rgb(248, 113, 113))
+            }
+            else -> {
+                txtConn.text = "Belum terhubung · Pair lalu Connect untuk mulai"
+                statusDot.backgroundTintList = ColorStateList.valueOf(Color.rgb(148, 163, 184))
+            }
+        }
     }
 
     private fun refreshApkList() {

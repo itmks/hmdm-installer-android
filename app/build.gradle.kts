@@ -11,8 +11,8 @@ android {
         applicationId = "co.sat.hmdminstaller"
         minSdk = 28
         targetSdk = 34
-        versionCode = 3
-        versionName = "3.2"
+        versionCode = 1
+        versionName = "3.0"
     }
 
     buildTypes {

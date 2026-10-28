@@ -6,11 +6,7 @@ import android.content.Context
 import android.content.res.ColorStateList
 import android.graphics.Color
 import android.net.Uri
-import android.net.wifi.WifiManager
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
-import android.view.WindowManager
 import android.provider.OpenableColumns
 import android.text.SpannableString
 import android.text.Spanned
@@ -39,7 +35,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var txtLog: TextView
     private lateinit var logScroll: ScrollView
     private lateinit var txtConn: TextView
-    private lateinit var txtSteps: TextView
     private lateinit var txtStatus: TextView
     private lateinit var txtApkTitle: TextView
     private lateinit var txtApkEmpty: TextView
@@ -73,8 +68,6 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
-        // Layar mati → Doze/Wi-Fi hemat daya → koneksi ADB putus. Jaga layar tetap menyala.
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         edtPairIp = findViewById(R.id.edtPairIp)
         edtPairPort = findViewById(R.id.edtPairPort)
@@ -84,7 +77,6 @@ class MainActivity : AppCompatActivity() {
         txtLog = findViewById(R.id.txtLog)
         logScroll = findViewById(R.id.logScroll)
         txtConn = findViewById(R.id.txtConn)
-        txtSteps = findViewById(R.id.txtSteps)
         txtStatus = findViewById(R.id.txtStatus)
         txtApkTitle = findViewById(R.id.txtApkTitle)
         txtApkEmpty = findViewById(R.id.txtApkEmpty)
@@ -180,42 +172,6 @@ class MainActivity : AppCompatActivity() {
         log("Isi IP dan Port lalu klik tombol.")
     }
 
-    // ---------- Jaga koneksi tetap hidup ----------
-
-    private val handler = Handler(Looper.getMainLooper())
-    private var wifiLock: WifiManager.WifiLock? = null
-
-    private val heartbeat = object : Runnable {
-        override fun run() {
-            if (!busy && connectedAddr != null) {
-                busy = true // cegah tombol berjalan bersamaan, tanpa mengubah tampilan
-                worker.execute {
-                    try { adb.keepAlive() } catch (_: Throwable) { }
-                    runOnUiThread { busy = false; refreshHeader() }
-                }
-            }
-            handler.postDelayed(this, 20_000)
-        }
-    }
-
-    override fun onStart() {
-        super.onStart()
-        try {
-            val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-            wifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "hmdm:adb").apply {
-                setReferenceCounted(false); acquire()
-            }
-        } catch (_: Throwable) { }
-        handler.postDelayed(heartbeat, 20_000)
-    }
-
-    override fun onStop() {
-        super.onStop()
-        handler.removeCallbacks(heartbeat)
-        try { wifiLock?.takeIf { it.isHeld }?.release() } catch (_: Throwable) { }
-        wifiLock = null
-    }
-
     override fun onDestroy() {
         super.onDestroy()
         worker.shutdown()
@@ -282,13 +238,6 @@ class MainActivity : AppCompatActivity() {
         val on = addr != null && adb.isConnected
         txtConn.text = if (on) "Terhubung · $addr" else "Belum terhubung · Pair lalu Connect untuk mulai"
         statusDot.backgroundTintList = ColorStateList.valueOf(if (on) Color.rgb(74, 222, 128) else Color.rgb(148, 163, 184))
-        fun mark(done: Boolean, label: String) = (if (done) "✓ " else "○ ") + label
-        txtSteps.text = listOf(
-            mark(paired || on, "Pair"),
-            mark(on, "Connect"),
-            mark(apks.isNotEmpty(), "APK"),
-            mark(ownerDone, "Jalankan")
-        ).joinToString("   ")
     }
 
     private fun refreshApkList() {

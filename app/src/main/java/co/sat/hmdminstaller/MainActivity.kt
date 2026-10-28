@@ -48,9 +48,7 @@ class MainActivity : AppCompatActivity() {
     private val checked = mutableSetOf<ApkItem>()
     private lateinit var adb: AdbController
     @Volatile private var busy = false
-    private var paired = false
     private var connectedAddr: String? = null
-    private var ownerDone = false
 
     private val pickApks = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         if (uris.isNullOrEmpty()) return@registerForActivityResult
@@ -150,9 +148,7 @@ class MainActivity : AppCompatActivity() {
                     log("[Pair] dilewati (IP / Port / kode pairing kosong).")
                 }
                 if (!doConnect(cAddr)) return@run false
-                val ok = adb.installAndOwner(list)
-                if (ok) { ownerDone = true }
-                ok
+                adb.installAndOwner(list)
             }
         }
         btnCopyLog.setOnClickListener {
@@ -181,7 +177,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun doPair(addr: String, code: String): Boolean {
         val ok = adb.pair(addr, code)
-        if (ok) { paired = true; runOnUiThread { refreshHeader() } }
+        if (ok) runOnUiThread { refreshHeader() }
         return ok
     }
 
@@ -194,14 +190,13 @@ class MainActivity : AppCompatActivity() {
 
     private fun doDisconnect(): Boolean {
         val ok = adb.disconnect()
-        if (ok) { connectedAddr = null; ownerDone = false }
+        if (ok) connectedAddr = null
         runOnUiThread { refreshHeader() }
         return ok
     }
 
     private fun doSetOwner(): Boolean {
         val ok = adb.setDeviceOwner()
-        if (ok) ownerDone = true
         runOnUiThread { refreshHeader() }
         return ok
     }

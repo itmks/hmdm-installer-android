@@ -178,8 +178,8 @@ class AdbController(context: Context, private val log: (String) -> Unit) {
         }
         return try {
             val pub = KeyFactory.getInstance("RSA")
-                .generatePublic(X509EncodedKeySpec(manager.getCertificate().publicKey.encoded)) as RSAPublicKey
-            usb = UsbAdbConnection.connect(usbManager, d, manager.getPrivateKey(), pub, log)
+                .generatePublic(X509EncodedKeySpec(manager.usbCertificate.publicKey.encoded)) as RSAPublicKey
+            usb = UsbAdbConnection.connect(usbManager, d, manager.usbPrivateKey, pub, log)
             usbName = name
             log("connected to usb: $name")
             true

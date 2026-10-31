@@ -2,9 +2,13 @@ package co.sat.hmdminstaller
 
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.res.ColorStateList
 import android.graphics.Color
+import android.hardware.usb.UsbManager
 import android.net.Uri
 import android.os.Bundle
 import android.provider.OpenableColumns
@@ -20,7 +24,9 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import com.google.android.material.button.MaterialButton
+import com.google.android.material.tabs.TabLayout
 import com.google.android.material.textfield.TextInputEditText
 import java.io.File
 import java.util.concurrent.Executors
@@ -44,6 +50,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var progress: ProgressBar
     private lateinit var apkList: LinearLayout
     private lateinit var buttons: List<MaterialButton>
+    private lateinit var tabMode: TabLayout
+    private lateinit var sectionWireless: View
+    private lateinit var sectionUsb: View
+    private lateinit var txtUsbDevice: TextView
 
     private val worker = Executors.newSingleThreadExecutor()
     private val apks = mutableListOf<ApkItem>()
@@ -53,6 +63,15 @@ class MainActivity : AppCompatActivity() {
     @Volatile private var connectedAddr: String? = null
     private var connectedSince = 0L
     private var lostAddr: String? = null
+    /** Tab aktif: 0 = Wireless debugging, 1 = USB debugging. */
+    private var currentTab = 0
+
+    // Pasang/cabut kabel USB → perbarui daftar perangkat di tab USB.
+    private val usbReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            refreshUsbDevices()
+        }
+    }
 
     // Pemantau status koneksi (live): jalan hanya saat layar terlihat.
     private val poller = Executors.newSingleThreadScheduledExecutor()
@@ -90,6 +109,10 @@ class MainActivity : AppCompatActivity() {
         statusDot = findViewById(R.id.statusDot)
         progress = findViewById(R.id.progress)
         apkList = findViewById(R.id.apkList)
+        tabMode = findViewById(R.id.tabMode)
+        sectionWireless = findViewById(R.id.sectionWireless)
+        sectionUsb = findViewById(R.id.sectionUsb)
+        txtUsbDevice = findViewById(R.id.txtUsbDevice)
 
         val btnPair: MaterialButton = findViewById(R.id.btnPair)
         val btnConnect: MaterialButton = findViewById(R.id.btnConnect)
@@ -100,10 +123,13 @@ class MainActivity : AppCompatActivity() {
         val btnInstallOnly: MaterialButton = findViewById(R.id.btnInstallOnly)
         val btnOwner: MaterialButton = findViewById(R.id.btnOwner)
         val btnAll: MaterialButton = findViewById(R.id.btnAll)
+        val btnUsbScan: MaterialButton = findViewById(R.id.btnUsbScan)
+        val btnUsbConnect: MaterialButton = findViewById(R.id.btnUsbConnect)
+        val btnUsbDisconnect: MaterialButton = findViewById(R.id.btnUsbDisconnect)
         val btnCopyLog: MaterialButton = findViewById(R.id.btnCopyLog)
         val btnClearLog: MaterialButton = findViewById(R.id.btnClearLog)
         buttons = listOf(btnPair, btnConnect, btnDisconnect, btnAddApk, btnRemoveApk,
-            btnClearApk, btnInstallOnly, btnOwner, btnAll)
+            btnClearApk, btnInstallOnly, btnOwner, btnAll, btnUsbScan, btnUsbConnect, btnUsbDisconnect)
 
         // Log (UI thread) → controller memakai callback ini dari thread kerja.
         adb = AdbController(this) { line -> runOnUiThread { log(line) } }
@@ -120,6 +146,16 @@ class MainActivity : AppCompatActivity() {
         btnDisconnect.setOnClickListener {
             run("Disconnect") { doDisconnect() }
         }
+
+        // Tab atas: Wireless debugging / USB debugging.
+        tabMode.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
+            override fun onTabSelected(tab: TabLayout.Tab) = showTab(tab.position)
+            override fun onTabUnselected(tab: TabLayout.Tab) {}
+            override fun onTabReselected(tab: TabLayout.Tab) {}
+        })
+        btnUsbScan.setOnClickListener { refreshUsbDevices(verbose = true) }
+        btnUsbConnect.setOnClickListener { run("Connect USB") { doConnectUsb() } }
+        btnUsbDisconnect.setOnClickListener { run("Disconnect") { doDisconnect() } }
         btnAddApk.setOnClickListener {
             pickApks.launch(arrayOf("application/vnd.android.package-archive", "application/octet-stream", "*/*"))
         }
@@ -150,8 +186,16 @@ class MainActivity : AppCompatActivity() {
             val pCode = clean(edtPairCode.text.toString())
             val cAddr = addr(edtConnIp.text.toString(), edtConnPort.text.toString())
             val list = apks.toList()
+            val useUsb = currentTab == 1
             run("Jalankan semua") {
-                if (adb.isConnected && connectedAddr == cAddr) {
+                if (useUsb) {
+                    if (adb.isUsbConnected) {
+                        runOnUiThread { log("[Connect USB] dilewati (sudah terhubung ke ${adb.usbLabel}).") }
+                    } else if (!doConnectUsb()) {
+                        runOnUiThread { log("Connect USB gagal. Periksa kabel, USB debugging di HP target, dan dialog izin, lalu coba lagi.") }
+                        return@run false
+                    }
+                } else if (adb.isConnected && connectedAddr == cAddr) {
                     runOnUiThread { log("[Pair & Connect] dilewati (sudah terhubung ke $cAddr).") }
                 } else {
                     if (pAddr.isNotEmpty() && pCode.isNotEmpty()) {
@@ -188,17 +232,25 @@ class MainActivity : AppCompatActivity() {
 
         refreshApkList()
         refreshHeader()
-        log("Isi IP dan Port lalu klik tombol.")
+        refreshUsbDevices()
+        log("Isi IP dan Port lalu klik tombol (tab Wireless), atau sambungkan kabel USB (tab USB Debugging).")
     }
 
     override fun onStart() {
         super.onStart()
+        val f = IntentFilter().apply {
+            addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED)
+            addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
+        }
+        ContextCompat.registerReceiver(this, usbReceiver, f, ContextCompat.RECEIVER_NOT_EXPORTED)
+        refreshUsbDevices()
         pollTask?.cancel(false)
         pollTask = poller.scheduleWithFixedDelay({ pollConnection() }, 0, 1, TimeUnit.SECONDS)
     }
 
     override fun onStop() {
         super.onStop()
+        try { unregisterReceiver(usbReceiver) } catch (_: Throwable) { }
         pollTask?.cancel(false)
         pollTask = null
     }
@@ -235,6 +287,7 @@ class MainActivity : AppCompatActivity() {
             lostAddr = addr
             connectedAddr = null
             connectedSince = 0L
+            refreshUsbDevices()
         }
         refreshHeader()
     }
@@ -259,10 +312,22 @@ class MainActivity : AppCompatActivity() {
         return ok
     }
 
+    private fun doConnectUsb(): Boolean {
+        val ok = adb.connectUsb()
+        if (ok) {
+            connectedAddr = "USB · ${adb.usbLabel ?: "perangkat"}"
+            connectedSince = System.currentTimeMillis()
+            lostAddr = null
+            lastProbe = connectedSince
+        }
+        runOnUiThread { refreshHeader(); refreshUsbDevices() }
+        return ok
+    }
+
     private fun doDisconnect(): Boolean {
         val ok = adb.disconnect()
         if (ok) { connectedAddr = null; connectedSince = 0L; lostAddr = null }
-        runOnUiThread { refreshHeader() }
+        runOnUiThread { refreshHeader(); refreshUsbDevices() }
         return ok
     }
 
@@ -316,10 +381,31 @@ class MainActivity : AppCompatActivity() {
                 statusDot.backgroundTintList = ColorStateList.valueOf(Color.rgb(248, 113, 113))
             }
             else -> {
-                txtConn.text = "Belum terhubung · Pair lalu Connect untuk mulai"
+                txtConn.text = if (currentTab == 1) "Belum terhubung · Sambungkan kabel USB lalu Connect USB"
+                               else "Belum terhubung · Pair lalu Connect untuk mulai"
                 statusDot.backgroundTintList = ColorStateList.valueOf(Color.rgb(148, 163, 184))
             }
         }
+    }
+
+    private fun showTab(position: Int) {
+        currentTab = position
+        sectionWireless.visibility = if (position == 0) View.VISIBLE else View.GONE
+        sectionUsb.visibility = if (position == 1) View.VISIBLE else View.GONE
+        if (position == 1) refreshUsbDevices()
+        refreshHeader()
+    }
+
+    /** Perbarui kotak "perangkat USB terdeteksi" di tab USB. */
+    private fun refreshUsbDevices(verbose: Boolean = false) {
+        if (!::adb.isInitialized) return
+        val devices = adb.usbDevices()
+        txtUsbDevice.text = when {
+            adb.isUsbConnected -> "Terhubung: ${adb.usbLabel ?: "-"}"
+            devices.isEmpty() -> "Tidak ada perangkat USB (ADB) terdeteksi.\nPastikan kabel OTG terpasang & USB debugging aktif."
+            else -> "Terdeteksi ${devices.size} perangkat:\n" + devices.joinToString("\n") { "• " + adb.usbLabelOf(it) }
+        }
+        if (verbose) log(if (devices.isEmpty()) "Tidak ada perangkat USB (ADB) terdeteksi." else "Perangkat USB terdeteksi: ${devices.size}")
     }
 
     private fun refreshApkList() {

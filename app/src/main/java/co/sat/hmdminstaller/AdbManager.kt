@@ -62,6 +62,10 @@ class AdbManager(context: Context) : AbsAdbConnectionManager() {
         cert = c!!
     }
 
+    /** Akses publik ke kunci/sertifikat yang sama (dipakai jalur USB di AdbController). */
+    val usbPrivateKey: PrivateKey get() = key
+    val usbCertificate: Certificate get() = cert
+
     override fun getPrivateKey(): PrivateKey = key
 
     override fun getCertificate(): Certificate = cert

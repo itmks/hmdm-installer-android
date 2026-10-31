@@ -5,6 +5,33 @@
     android:layout_height="match_parent"
     android:orientation="vertical">
 
+    <!-- Menu tab atas: mode koneksi ADB -->
+    <com.google.android.material.tabs.TabLayout
+        android:id="@+id/tabMode"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@color/side"
+        app:tabGravity="fill"
+        app:tabIndicatorColor="@color/header_subtext"
+        app:tabIndicatorFullWidth="true"
+        app:tabIndicatorHeight="3dp"
+        app:tabMode="fixed"
+        app:tabRippleColor="@color/header_end"
+        app:tabSelectedTextColor="@color/header_text"
+        app:tabTextAppearance="@style/Hmdm.TabText"
+        app:tabTextColor="@color/header_subtext">
+
+        <com.google.android.material.tabs.TabItem
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Wireless Debugging" />
+
+        <com.google.android.material.tabs.TabItem
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="USB Debugging" />
+    </com.google.android.material.tabs.TabLayout>
+
     <ScrollView
         android:layout_width="match_parent"
         android:layout_height="0dp"
@@ -104,6 +131,13 @@
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
                 android:padding="14dp">
+
+            <!-- ===== Tab Wireless Debugging ===== -->
+            <LinearLayout
+                android:id="@+id/sectionWireless"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical">
 
             <!-- 1. Pair -->
             <com.google.android.material.card.MaterialCardView
@@ -357,6 +391,156 @@
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
 
+            </LinearLayout>
+
+            <!-- ===== Tab USB Debugging ===== -->
+            <LinearLayout
+                android:id="@+id/sectionUsb"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <!-- 1. Hubungkan kabel -->
+                <com.google.android.material.card.MaterialCardView
+                    style="@style/Widget.Hmdm.Card"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:padding="14dp">
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal">
+
+                            <TextView
+                                style="@style/Hmdm.Badge"
+                                android:text="1" />
+
+                            <LinearLayout
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="12dp"
+                                android:layout_weight="1"
+                                android:orientation="vertical">
+
+                                <TextView
+                                    style="@style/Hmdm.CardTitle"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="Hubungkan Kabel USB" />
+
+                                <TextView
+                                    style="@style/Hmdm.CardHint"
+                                    android:layout_width="match_parent"
+                                    android:layout_height="wrap_content"
+                                    android:text="HP target: Opsi Developer › USB debugging aktif, mode USB bukan &quot;hanya mengisi daya&quot;. Sambungkan ke HP ini dengan kabel OTG / USB-C ke USB-C." />
+                            </LinearLayout>
+                        </LinearLayout>
+
+                        <TextView
+                            android:id="@+id/txtUsbDevice"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:background="@drawable/bg_note"
+                            android:fontFamily="monospace"
+                            android:lineSpacingMultiplier="1.1"
+                            android:padding="12dp"
+                            android:text="Mencari perangkat USB..."
+                            android:textColor="@color/text"
+                            android:textSize="12sp" />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnUsbScan"
+                            style="@style/Widget.Hmdm.Button.Outlined"
+                            android:layout_width="match_parent"
+                            android:layout_height="36dp"
+                            android:layout_marginTop="8dp"
+                            android:minHeight="0dp"
+                            android:text="Cari Perangkat"
+                            android:textSize="13sp" />
+                    </LinearLayout>
+                </com.google.android.material.card.MaterialCardView>
+
+                <!-- 2. USB Connect -->
+                <com.google.android.material.card.MaterialCardView
+                    style="@style/Widget.Hmdm.Card"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:padding="14dp">
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal">
+
+                            <TextView
+                                style="@style/Hmdm.Badge"
+                                android:text="2" />
+
+                            <LinearLayout
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="12dp"
+                                android:layout_weight="1"
+                                android:orientation="vertical">
+
+                                <TextView
+                                    style="@style/Hmdm.CardTitle"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="ADB Connect (USB)" />
+
+                                <TextView
+                                    style="@style/Hmdm.CardHint"
+                                    android:layout_width="match_parent"
+                                    android:layout_height="wrap_content"
+                                    android:text="Izinkan akses USB di HP ini, lalu setujui &quot;Izinkan debugging USB?&quot; di HP target." />
+                            </LinearLayout>
+                        </LinearLayout>
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:orientation="horizontal">
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnUsbDisconnect"
+                                style="@style/Widget.Hmdm.Button.Outlined"
+                                android:layout_width="0dp"
+                                android:layout_height="36dp"
+                                android:layout_marginEnd="8dp"
+                                android:layout_weight="1"
+                                android:minHeight="0dp"
+                                android:text="Disconnect"
+                                android:textSize="13sp" />
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnUsbConnect"
+                                android:layout_width="0dp"
+                                android:layout_height="36dp"
+                                android:layout_weight="1"
+                                android:minHeight="0dp"
+                                android:text="Connect USB"
+                                android:textSize="13sp" />
+                        </LinearLayout>
+                    </LinearLayout>
+                </com.google.android.material.card.MaterialCardView>
+            </LinearLayout>
+
             <!-- 3. APK -->
             <com.google.android.material.card.MaterialCardView
                 style="@style/Widget.Hmdm.Card"
@@ -540,7 +724,7 @@
                         android:background="@drawable/bg_note"
                         android:lineSpacingMultiplier="1.1"
                         android:padding="12dp"
-                        android:text="Jalankan Semua: Pair › Connect › Install semua APK › Set Device Owner. Device owner hanya berhasil di HP baru / habis factory reset tanpa akun."
+                        android:text="Jalankan Semua: Pair › Connect (atau Connect USB) › Install semua APK › Set Device Owner. Device owner hanya berhasil di HP baru / habis factory reset tanpa akun."
                         android:textColor="@color/text"
                         android:textSize="12sp" />
                 </LinearLayout>

@@ -604,6 +604,15 @@
                         android:textColor="@color/muted"
                         android:textSize="13sp" />
 
+                    <CheckBox
+                        android:id="@+id/chkSkipVerify"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:text="Matikan verifikasi Play Protect saat install (lebih cepat)"
+                        android:textColor="@color/muted"
+                        android:textSize="12sp" />
+
                     <com.google.android.material.button.MaterialButton
                         android:id="@+id/btnAddApk"
                         android:layout_width="match_parent"

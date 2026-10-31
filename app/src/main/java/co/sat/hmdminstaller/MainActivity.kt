@@ -156,6 +156,8 @@ class MainActivity : AppCompatActivity() {
         btnUsbScan.setOnClickListener { refreshUsbDevices(verbose = true) }
         btnUsbConnect.setOnClickListener { run("Connect USB") { doConnectUsb() } }
         btnUsbDisconnect.setOnClickListener { run("Disconnect") { doDisconnect() } }
+        val chkSkipVerify: CheckBox = findViewById(R.id.chkSkipVerify)
+        chkSkipVerify.setOnCheckedChangeListener { _, on -> adb.skipVerifier = on }
         btnAddApk.setOnClickListener {
             pickApks.launch(arrayOf("application/vnd.android.package-archive", "application/octet-stream", "*/*"))
         }

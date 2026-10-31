@@ -34,6 +34,8 @@ class AdbController(context: Context, private val log: (String) -> Unit) {
 
     companion object {
         const val OWNER_COMPONENT = "com.hmdm.launcher/.AdminReceiver"
+        /** Buffer baca file = payload WRTE terbesar, supaya tiap paket USB penuh (sedikit tunggu OKAY). */
+        private const val SEND_BUFFER = 256 * 1024
     }
 
     private val appContext = context.applicationContext
@@ -41,6 +43,9 @@ class AdbController(context: Context, private val log: (String) -> Unit) {
     private val usbManager = appContext.getSystemService(Context.USB_SERVICE) as UsbManager
     @Volatile private var usb: UsbAdbConnection? = null
     @Volatile private var usbName: String? = null
+
+    /** Bila true: matikan "Verify apps over USB" / Play Protect di HP target sebelum install (lebih cepat). */
+    @Volatile var skipVerifier = false
 
     /** Jalur Wireless debugging (TCP). */
     private val wirelessLink = object : AdbLink {
@@ -203,6 +208,15 @@ class AdbController(context: Context, private val log: (String) -> Unit) {
             log("Daftar APK kosong. Tambahkan APK terlebih dahulu.")
             return false
         }
+        if (skipVerifier) {
+            log("> adb shell settings put global verifier_verify_adb_installs 0")
+            try {
+                shell("settings put global verifier_verify_adb_installs 0")
+                shell("settings put global package_verifier_user_consent -1")
+            } catch (e: Throwable) {
+                log("Peringatan: gagal mematikan verifikasi install: ${e.message ?: e.javaClass.simpleName}")
+            }
+        }
         var ok = 0
         val failed = StringBuilder()
         apks.forEachIndexed { i, apk ->
@@ -214,9 +228,11 @@ class AdbController(context: Context, private val log: (String) -> Unit) {
                 return@forEachIndexed
             }
             log("> adb install -r ${apk.name}")
+            val t0 = System.currentTimeMillis()
             val out = try { installOne(apk.file) } catch (e: Throwable) {
                 "Error: ${e.message ?: e.javaClass.simpleName}"
             }
+            log("Total ${apk.name}: ${"%.1f".format((System.currentTimeMillis() - t0) / 1000.0)} detik")
             out.lines().filter { it.isNotBlank() }.forEach { log(it.trim()) }
             if (out.contains("Success", ignoreCase = true)) ok++ else failed.appendLine("  - ${apk.name}")
         }
@@ -278,21 +294,40 @@ class AdbController(context: Context, private val log: (String) -> Unit) {
         }.apply { isDaemon = true; start() }
         try {
             val os = stream.output()
+            val total = file.length()
+            val t0 = System.currentTimeMillis()
+            var sent = 0L
+            var lastLog = t0
             file.inputStream().use { input ->
-                val buf = ByteArray(32 * 1024)
+                val buf = ByteArray(SEND_BUFFER)
                 while (true) {
                     val n = input.read(buf)
                     if (n < 0) break
                     os.write(buf, 0, n)
+                    sent += n
+                    val now = System.currentTimeMillis()
+                    if (now - lastLog >= 3_000 && total > 0) {
+                        lastLog = now
+                        log("  Mengirim ${mb(sent)} / ${mb(total)} MB (${sent * 100 / total}%) · ${speed(sent, now - t0)}")
+                    }
                 }
             }
             os.flush()
-            return readAll(stream.input())
+            val tSent = System.currentTimeMillis()
+            log("  Transfer selesai: ${mb(sent)} MB dalam ${"%.1f".format((tSent - t0) / 1000.0)} detik (${speed(sent, tSent - t0)}). Menunggu HP target memasang...")
+            val out = readAll(stream.input())
+            log("  Pemasangan di HP target: ${"%.1f".format((System.currentTimeMillis() - tSent) / 1000.0)} detik")
+            return out
         } finally {
             watchdog.interrupt()
             try { stream.close() } catch (_: Throwable) { }
         }
     }
+
+    private fun mb(n: Long) = "%.1f".format(n / 1048576.0)
+
+    private fun speed(bytes: Long, ms: Long): String =
+        if (ms <= 0) "-" else "%.2f MB/s".format(bytes / 1048576.0 / (ms / 1000.0))
 
     private fun readAll(input: InputStream): String {
         val bos = ByteArrayOutputStream()

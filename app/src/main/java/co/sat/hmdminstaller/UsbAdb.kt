@@ -169,6 +169,12 @@ class UsbAdbConnection private constructor(
         private const val VERSION = 0x01000001
         private const val MAX_DATA = 256 * 1024
         private const val USB_CHUNK = 16 * 1024
+        /** Ukuran satu transfer bulk saat MENULIS (jalur upload APK). targetSdk >= 28 boleh > 16 KB. */
+        private const val WRITE_CHUNK = 64 * 1024
+        /** Batas payload satu paket WRTE; makin besar = makin sedikit tunggu OKAY per APK. */
+        private const val MAX_WRITE_PAYLOAD = 256 * 1024
+        /** Mulai versi ini checksum paket tidak diperiksa lagi oleh adbd. */
+        private const val VERSION_SKIP_CHECKSUM = 0x01000001
         private const val AUTH_TOKEN = 1
         private const val AUTH_SIGNATURE = 2
         private const val AUTH_RSAPUBLICKEY = 3
@@ -218,6 +224,8 @@ class UsbAdbConnection private constructor(
     private val nextId = AtomicInteger(1)
     private val streams = ConcurrentHashMap<Int, Stream>()
     @Volatile private var maxData = 4096
+    @Volatile private var skipChecksum = false
+    @Volatile private var writeChunk = WRITE_CHUNK
     private var reader: Thread? = null
 
     override val isConnected: Boolean
@@ -236,6 +244,7 @@ class UsbAdbConnection private constructor(
                 A_CNXN -> {
                     val peer = p.arg1
                     maxData = if (peer in 1024..MAX_DATA) peer else if (peer > MAX_DATA) MAX_DATA else 4096
+                    skipChecksum = p.arg0 >= VERSION_SKIP_CHECKSUM
                     return
                 }
                 A_AUTH -> if (p.arg0 == AUTH_TOKEN) {
@@ -294,24 +303,31 @@ class UsbAdbConnection private constructor(
         return Pkt(cmd, a0, a1, data)
     }
 
-    private fun sendPacket(cmd: Int, a0: Int, a1: Int, data: ByteArray) {
+    /** Kirim satu paket; payload = data[off, off+len) tanpa disalin. */
+    private fun sendPacket(cmd: Int, a0: Int, a1: Int, data: ByteArray, off: Int = 0, len: Int = data.size) {
         synchronized(writeLock) {
             if (dead.get()) throw IOException("Koneksi USB sudah tertutup.")
             var sum = 0
-            for (b in data) sum += b.toInt() and 0xFF
+            // Checksum hanya perlu untuk adbd lama; lewati agar tidak menghitung ratusan KB per paket.
+            if (!skipChecksum) for (i in off until off + len) sum += data[i].toInt() and 0xFF
             val bb = ByteBuffer.allocate(24).order(ByteOrder.LITTLE_ENDIAN)
-            bb.putInt(cmd).putInt(a0).putInt(a1).putInt(data.size).putInt(sum).putInt(cmd.inv())
-            writeAll(bb.array())
-            if (data.isNotEmpty()) writeAll(data)
+            bb.putInt(cmd).putInt(a0).putInt(a1).putInt(len).putInt(sum).putInt(cmd.inv())
+            writeAll(bb.array(), 0, 24)
+            if (len > 0) writeAll(data, off, len)
         }
     }
 
-    private fun writeAll(buf: ByteArray) {
-        var off = 0
+    private fun writeAll(buf: ByteArray, start: Int, len: Int) {
+        var off = start
+        val end = start + len
         var zeros = 0
-        while (off < buf.size) {
-            val r = conn.bulkTransfer(epOut, buf, off, minOf(buf.size - off, USB_CHUNK), 5000)
-            if (r < 0) throw IOException("Tulis data USB gagal (kabel terlepas?).")
+        while (off < end) {
+            val r = conn.bulkTransfer(epOut, buf, off, minOf(end - off, writeChunk), 5000)
+            if (r < 0) {
+                // Kernel/perangkat tidak menerima transfer besar: turun ke 16 KB lalu ulangi sekali.
+                if (writeChunk > USB_CHUNK) { writeChunk = USB_CHUNK; continue }
+                throw IOException("Tulis data USB gagal (kabel terlepas?).")
+            }
             if (r == 0) { if (++zeros > 100) throw IOException("Tulis data USB macet."); continue }
             off += r
         }
@@ -470,11 +486,11 @@ class UsbAdbConnection private constructor(
             override fun write(b: ByteArray, off: Int, len: Int) {
                 var o = off
                 var rem = len
-                val chunk = minOf(maxData, 64 * 1024)
+                val chunk = minOf(maxData, MAX_WRITE_PAYLOAD)
                 while (rem > 0) {
                     if (closedFlag || dead.get()) throw IOException("Stream USB sudah tertutup.")
                     val n = minOf(rem, chunk)
-                    sendPacket(A_WRTE, localId, remoteId, b.copyOfRange(o, o + n))
+                    sendPacket(A_WRTE, localId, remoteId, b, o, n)
                     // Tunggu OKAY dari device sebelum paket berikutnya (flow control ADB).
                     while (!acks.tryAcquire(500, TimeUnit.MILLISECONDS)) {
                         if (closedFlag || dead.get()) throw IOException("Stream USB ditutup saat menulis.")

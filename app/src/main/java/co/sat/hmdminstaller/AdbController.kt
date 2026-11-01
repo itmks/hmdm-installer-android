@@ -63,9 +63,15 @@ class AdbController(context: Context, private val log: (String) -> Unit) {
         val (host, port) = split(addr) ?: run { log("Alamat pairing tidak valid: $addr"); return false }
         log("> adb pair $addr ******")
         return try {
-            manager.pair(host, port, code)
-            log("Successfully paired to $addr")
-            true
+            // Ditampung sebagai Any? agar aman baik pair() mengembalikan Boolean maupun void.
+            val result: Any? = manager.pair(host, port, code)
+            if (result == false) {
+                log("Pairing gagal: ditolak oleh device (cek kode / port pairing).")
+                false
+            } else {
+                log("Successfully paired to $addr")
+                true
+            }
         } catch (e: Throwable) {
             log("Pairing gagal: ${e.message ?: e.javaClass.simpleName}")
             false

@@ -84,6 +84,11 @@ class AdbController(context: Context, private val log: (String) -> Unit) {
             return false
         }
         val (host, port) = split(addr) ?: run { log("Alamat connect tidak valid: $addr"); return false }
+        // connect() di library langsung "sukses" bila masih ada koneksi lama (mis. ke IP/port lain),
+        // jadi putuskan dulu agar benar-benar menyambung ke alamat yang diminta.
+        if (isConnected) {
+            try { manager.disconnect() } catch (_: Throwable) { }
+        }
         var ok = false
         for (attempt in 1..2) {
             if (ok) break
@@ -93,9 +98,17 @@ class AdbController(context: Context, private val log: (String) -> Unit) {
             }
             log("> adb connect $addr")
             try {
-                manager.connect(host, port)
-                ok = manager.isConnected
-                if (ok) log("connected to $addr") else log("Connect gagal: tidak terhubung")
+                val result: Any? = manager.connect(host, port)
+                if (result == false || !manager.isConnected) {
+                    log("Connect gagal: tidak terhubung")
+                } else if (probe()) {
+                    // Terbukti: device menjawab perintah shell, bukan sekadar flag.
+                    ok = true
+                    log("connected to $addr")
+                } else {
+                    log("Connect gagal: device tidak menjawab (belum di-pair / Wireless debugging mati / port salah)")
+                    try { manager.disconnect() } catch (_: Throwable) { }
+                }
             } catch (e: Throwable) {
                 log("Connect gagal: ${e.message ?: e.javaClass.simpleName}")
             }

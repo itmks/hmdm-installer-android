@@ -133,8 +133,11 @@ class AdbController(context: Context, private val log: (String) -> Unit) {
                 return@forEachIndexed
             }
             log("> adb install -r ${apk.name}")
-            val out = try { installOne(apk.file) } catch (e: Throwable) {
-                "Error: ${e.message ?: e.javaClass.simpleName}"
+            var out = installTry(apk.file)
+            if (!out.contains("Success", ignoreCase = true) && isTransient(out) && isConnected) {
+                log("Stream tertutup, mencoba lagi (1x)...")
+                Thread.sleep(1500)
+                out = installTry(apk.file)
             }
             out.lines().filter { it.isNotBlank() }.forEach { log(it.trim()) }
             if (out.contains("Success", ignoreCase = true)) ok++ else failed.appendLine("  - ${apk.name}")
@@ -187,6 +190,13 @@ class AdbController(context: Context, private val log: (String) -> Unit) {
         }
     }
 
+    private fun installTry(file: File): String =
+        try { installOne(file) } catch (e: Throwable) { "Error: ${e.message ?: e.javaClass.simpleName}" }
+
+    /** Kegagalan tanpa pesan dari pm (stream putus), bukan penolakan install seperti INSTALL_FAILED_*. */
+    private fun isTransient(out: String): Boolean =
+        out.isBlank() || (out.startsWith("Error:") && !out.contains("INSTALL_", ignoreCase = true))
+
     /** Setara `adb install -r`: stream APK ke `cmd package install -S <ukuran>` lewat service exec. */
     private fun installOne(file: File): String {
         val stream = manager.openStream("exec:cmd package install -r -S ${file.length()}")
@@ -195,30 +205,45 @@ class AdbController(context: Context, private val log: (String) -> Unit) {
             try { Thread.sleep(300_000); stream.close() } catch (_: InterruptedException) { } catch (_: Throwable) { }
         }.apply { isDaemon = true; start() }
         try {
-            val os = stream.openOutputStream()
-            file.inputStream().use { input ->
-                val buf = ByteArray(32 * 1024)
-                while (true) {
-                    val n = input.read(buf)
-                    if (n < 0) break
-                    os.write(buf, 0, n)
+            var writeError: java.io.IOException? = null
+            try {
+                val os = stream.openOutputStream()
+                file.inputStream().use { input ->
+                    val buf = ByteArray(32 * 1024)
+                    while (true) {
+                        val n = input.read(buf)
+                        if (n < 0) break
+                        os.write(buf, 0, n)
+                    }
                 }
+                os.flush()
+            } catch (e: java.io.IOException) {
+                // Device menutup stream lebih awal (mis. install ditolak). Tetap baca pesan aslinya.
+                writeError = e
             }
-            os.flush()
-            return readAll(stream.openInputStream())
+            val out = readAll(stream.openInputStream())
+            if (out.isBlank() && writeError != null) {
+                return "Error: ${writeError.message ?: "stream closed"}"
+            }
+            return out
         } finally {
             watchdog.interrupt()
             try { stream.close() } catch (_: Throwable) { }
         }
     }
 
+    /** Baca sampai EOF. Bila stream ditutup device (IOException), kembalikan yang sudah terbaca. */
     private fun readAll(input: InputStream): String {
         val bos = ByteArrayOutputStream()
         val buf = ByteArray(4096)
-        while (true) {
-            val n = input.read(buf)
-            if (n < 0) break
-            bos.write(buf, 0, n)
+        try {
+            while (true) {
+                val n = input.read(buf)
+                if (n < 0) break
+                bos.write(buf, 0, n)
+            }
+        } catch (_: java.io.IOException) {
+            // "Stream closed" saat EOF itu normal: device menutup stream setelah perintah selesai.
         }
         return bos.toString("UTF-8")
     }

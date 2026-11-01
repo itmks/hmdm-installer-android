@@ -254,6 +254,10 @@ class MainActivity : AppCompatActivity() {
             connectedSince = System.currentTimeMillis()
             lostAddr = null
             lastProbe = connectedSince
+        } else {
+            // Connect gagal: koneksi lama sudah diputus, jangan tampilkan alamat lama sebagai terhubung.
+            connectedAddr = null
+            connectedSince = 0L
         }
         runOnUiThread { refreshHeader() }
         return ok

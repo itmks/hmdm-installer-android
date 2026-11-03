@@ -97,6 +97,13 @@ class UsbBridge(context: Context) {
     private var client: Socket? = null
     @Volatile private var proxyGen = 0
 
+    /** Diagnostik: dipanggil dari thread latar saat jembatan berhenti / error. */
+    @Volatile var onLog: ((String) -> Unit)? = null
+    @Volatile private var bytesUp = 0L
+    @Volatile private var bytesDown = 0L
+
+    private fun dbg(msg: String) { try { onLog?.invoke("[USB] $msg") } catch (_: Throwable) { } }
+
     val isOpen: Boolean get() = conn != null
 
     /** Buka device & claim interface ADB. Lempar IOException bila gagal. */
@@ -174,6 +181,7 @@ class UsbBridge(context: Context) {
     private fun pump(c: UsbDeviceConnection, s: Socket, gen: Int) {
         val inEp = epIn ?: return
         val outEp = epOut ?: return
+        bytesUp = 0; bytesDown = 0
 
         // socket (libadb) → USB (adbd)
         val up = Thread({
@@ -185,13 +193,16 @@ class UsbBridge(context: Context) {
                     val len = le32(header, 12)
                     if (len < 0 || len > MAX_PAYLOAD) throw IOException("Panjang payload tidak valid: $len")
                     usbWrite(c, outEp, header, ADB_HEADER)
+                    bytesUp += ADB_HEADER
                     if (len > 0) {
                         val payload = ByteArray(len)
                         readFully(sin, payload, len)
                         usbWrite(c, outEp, payload, len)
+                        bytesUp += len
                     }
                 }
-            } catch (_: Throwable) {
+            } catch (e: Throwable) {
+                if (gen == proxyGen) dbg("jalur kirim berhenti: ${e.message ?: e.javaClass.simpleName} (terkirim ${bytesUp / 1024} KB)")
             } finally {
                 try { s.close() } catch (_: Throwable) { }
             }
@@ -215,8 +226,10 @@ class UsbBridge(context: Context) {
                     remain -= n
                 }
                 sout.flush()
+                bytesDown += ADB_HEADER + len
             }
-        } catch (_: Throwable) {
+        } catch (e: Throwable) {
+            if (gen == proxyGen) dbg("jalur terima berhenti: ${e.message ?: e.javaClass.simpleName} (diterima ${bytesDown / 1024} KB)")
         } finally {
             try { s.close() } catch (_: Throwable) { }
             up.interrupt()

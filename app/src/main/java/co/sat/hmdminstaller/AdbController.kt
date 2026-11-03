@@ -247,11 +247,16 @@ class AdbController(context: Context, private val log: (String) -> Unit) {
         return false
     }
 
-    private fun shell(cmd: String): String {
+    /** Jalankan perintah shell; stream ditutup paksa bila tidak selesai dalam [timeoutMs]. */
+    private fun shell(cmd: String, timeoutMs: Long = 30_000): String {
         val stream = manager.openStream("shell:$cmd")
+        val watchdog = Thread {
+            try { Thread.sleep(timeoutMs); stream.close() } catch (_: InterruptedException) { } catch (_: Throwable) { }
+        }.apply { isDaemon = true; start() }
         try {
             return readAll(stream.openInputStream())
         } finally {
+            watchdog.interrupt()
             try { stream.close() } catch (_: Throwable) { }
         }
     }
@@ -265,33 +270,56 @@ class AdbController(context: Context, private val log: (String) -> Unit) {
      */
     private fun installViaTmp(file: File): String {
         val remote = "/data/local/tmp/hmdm_install.apk"
+        val total = file.length()
         try {
+            log("[1/4] Cek koneksi ke device...")
+            if (!probe()) return "Error: koneksi ke device sudah putus (USB jembatan berhenti). Cabut-colok kabel lalu Connect lagi."
+            log("[2/4] Mengirim APK ($total byte) ke $remote ...")
             val push = manager.openStream("exec:cat > $remote")
+            // Pengaman: bila tidak ada kemajuan 60 detik, tutup stream agar tidak menggantung.
+            val lastProgress = java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis())
+            val watchdog = Thread {
+                try {
+                    while (true) {
+                        Thread.sleep(5_000)
+                        if (System.currentTimeMillis() - lastProgress.get() > 60_000) { push.close(); break }
+                    }
+                } catch (_: InterruptedException) { } catch (_: Throwable) { }
+            }.apply { isDaemon = true; start() }
             try {
                 val os = push.openOutputStream()
+                var sent = 0L
+                var nextLog = 25
                 file.inputStream().use { input ->
                     val buf = ByteArray(32 * 1024)
                     while (true) {
                         val n = input.read(buf)
                         if (n < 0) break
                         os.write(buf, 0, n)
+                        sent += n
+                        lastProgress.set(System.currentTimeMillis())
+                        val pct = if (total > 0) (sent * 100 / total).toInt() else 100
+                        if (pct >= nextLog) { log("    terkirim $pct% ($sent/$total byte)"); nextLog += 25 }
                     }
                 }
                 os.flush()
             } finally {
+                watchdog.interrupt()
                 try { push.close() } catch (_: Throwable) { }
             }
             Thread.sleep(800)
+            log("[3/4] Verifikasi ukuran file di device...")
             val size = shell("wc -c < $remote").trim()
-            if (size != file.length().toString()) {
-                return "Error: ukuran file di device ($size) berbeda dari ${file.length()} (transfer tidak lengkap)"
+            if (size != total.toString()) {
+                return "Error: ukuran file di device ($size) berbeda dari $total (transfer tidak lengkap)"
             }
-            val out = shell("pm install -r $remote")
+            log("[4/4] pm install -r ...")
+            val out = shell("pm install -r $remote", 180_000)
             return if (out.isBlank()) "Error: pm install tidak mengembalikan output" else out
         } catch (e: Throwable) {
             return "Error: ${e.message ?: e.javaClass.simpleName}"
         } finally {
-            try { shell("rm -f $remote") } catch (_: Throwable) { }
+            try { shell("rm -f $remote", 10_000) } catch (_: Throwable) { }
         }
     }
 

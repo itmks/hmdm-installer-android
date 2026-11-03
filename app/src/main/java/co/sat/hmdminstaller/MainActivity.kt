@@ -137,6 +137,7 @@ class MainActivity : AppCompatActivity() {
 
         // Log (UI thread) → controller memakai callback ini dari thread kerja.
         adb = AdbController(this) { line -> runOnUiThread { log(line) } }
+        usb.onLog = { line -> runOnUiThread { log(line) } }
 
         btnPair.setOnClickListener {
             val addr = addr(edtPairIp.text.toString(), edtPairPort.text.toString())

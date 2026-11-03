@@ -261,7 +261,7 @@ class AdbController(context: Context, private val log: (String) -> Unit) {
 
     /**
      * Jalur alternatif: kirim APK ke /data/local/tmp lewat `exec:cat`, verifikasi ukuran, lalu
-     * `pm install -r`. Output pm (Success / Failure [INSTALL_FAILED_...]) selalu terbaca.
+     * `pm install -r`. Output pm (Success atau Failure INSTALL_FAILED_xxx) selalu terbaca.
      */
     private fun installViaTmp(file: File): String {
         val remote = "/data/local/tmp/hmdm_install.apk"

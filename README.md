@@ -18,6 +18,13 @@ buka tab Actions › "Build APK" › Run workflow, lalu unduh artifact `HMDM-Ins
 4. Daftar APK awalnya kosong: tambahkan `hmdm.apk` (dan APK lain) dengan "+ Tambah APK".
 5. **Install Semua APK**, **Set Device Owner**, atau **Jalankan Semua**.
 
+### Mode USB debugging (tab "USB")
+1. HP target: Opsi Developer › aktifkan **USB debugging**.
+2. Sambungkan kabel USB dari HP teknisi ke HP target (pakai adapter OTG bila perlu). HP teknisi harus mendukung USB host.
+3. Buka tab **USB** › **Cari** (opsional) › **Connect USB**. Setujui dialog izin USB di HP teknisi, lalu dialog
+   "Izinkan USB debugging?" di HP target (centang "Selalu izinkan").
+4. Lanjut seperti biasa: **Install Semua APK**, **Set Device Owner**, atau **Jalankan Semua** (di tab USB langkah Pair dilewati).
+
 Syarat device owner: HP target baru / habis factory reset dan belum ada akun (Google dll).
 Satu HP tidak bisa memasang dirinya sendiri sebagai device owner dengan cara ini kecuali IP diisi 127.0.0.1 dan
 syarat di atas terpenuhi.
@@ -25,6 +32,8 @@ syarat di atas terpenuhi.
 ## Catatan teknis
 - ADB memakai library [libadb-android](https://github.com/MuntashirAkon/libadb-android) (JitPack) + Conscrypt (TLS 1.3).
 - Kunci/sertifikat ADB dibuat sekali (`AdbManager.kt`) dan disimpan; pairing terikat pada kunci ini.
+- USB: `UsbBridge.kt` memakai USB Host API dan menjembatani bulk endpoint ADB ke socket lokal 127.0.0.1 yang
+  disambungi libadb-android (bingkai ADB di USB identik dengan TCP, jadi isi paket tidak diubah).
 - Install = `cmd package install -r -S <ukuran>` lewat stream `exec:` (setara `adb install -r`).
 - Package id `co.sat.hmdminstaller`, minSdk 28 (Android 9+), build debug.
 

@@ -1,10 +1,15 @@
 package co.sat.hmdminstaller
 
+import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.res.ColorStateList
 import android.graphics.Color
+import android.hardware.usb.UsbDevice
+import android.hardware.usb.UsbManager
 import android.net.Uri
 import android.os.Bundle
 import android.provider.OpenableColumns
@@ -21,6 +26,7 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import com.google.android.material.button.MaterialButton
+import com.google.android.material.tabs.TabLayout
 import com.google.android.material.textfield.TextInputEditText
 import java.io.File
 import java.util.concurrent.Executors
@@ -44,6 +50,15 @@ class MainActivity : AppCompatActivity() {
     private lateinit var progress: ProgressBar
     private lateinit var apkList: LinearLayout
     private lateinit var buttons: List<MaterialButton>
+    private lateinit var tabMode: TabLayout
+    private lateinit var panelWireless: View
+    private lateinit var panelUsb: View
+    private lateinit var txtUsbDevice: TextView
+    private lateinit var usb: UsbBridge
+
+    /** Mode koneksi aktif sesuai tab: false = Wireless, true = USB. */
+    @Volatile private var usbMode = false
+    @Volatile private var usbDevice: UsbDevice? = null
 
     private val worker = Executors.newSingleThreadExecutor()
     private val apks = mutableListOf<ApkItem>()
@@ -94,6 +109,9 @@ class MainActivity : AppCompatActivity() {
         val btnPair: MaterialButton = findViewById(R.id.btnPair)
         val btnConnect: MaterialButton = findViewById(R.id.btnConnect)
         val btnDisconnect: MaterialButton = findViewById(R.id.btnDisconnect)
+        val btnUsbScan: MaterialButton = findViewById(R.id.btnUsbScan)
+        val btnUsbConnect: MaterialButton = findViewById(R.id.btnUsbConnect)
+        val btnUsbDisconnect: MaterialButton = findViewById(R.id.btnUsbDisconnect)
         val btnAddApk: MaterialButton = findViewById(R.id.btnAddApk)
         val btnRemoveApk: MaterialButton = findViewById(R.id.btnRemoveApk)
         val btnClearApk: MaterialButton = findViewById(R.id.btnClearApk)
@@ -102,8 +120,20 @@ class MainActivity : AppCompatActivity() {
         val btnAll: MaterialButton = findViewById(R.id.btnAll)
         val btnCopyLog: MaterialButton = findViewById(R.id.btnCopyLog)
         val btnClearLog: MaterialButton = findViewById(R.id.btnClearLog)
-        buttons = listOf(btnPair, btnConnect, btnDisconnect, btnAddApk, btnRemoveApk,
-            btnClearApk, btnInstallOnly, btnOwner, btnAll)
+        buttons = listOf(btnPair, btnConnect, btnDisconnect, btnUsbScan, btnUsbConnect, btnUsbDisconnect,
+            btnAddApk, btnRemoveApk, btnClearApk, btnInstallOnly, btnOwner, btnAll)
+
+        tabMode = findViewById(R.id.tabMode)
+        panelWireless = findViewById(R.id.panelWireless)
+        panelUsb = findViewById(R.id.panelUsb)
+        txtUsbDevice = findViewById(R.id.txtUsbDevice)
+        usb = UsbBridge(this)
+
+        tabMode.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
+            override fun onTabSelected(tab: TabLayout.Tab) { setMode(tab.position == 1) }
+            override fun onTabUnselected(tab: TabLayout.Tab) {}
+            override fun onTabReselected(tab: TabLayout.Tab) {}
+        })
 
         // Log (UI thread) → controller memakai callback ini dari thread kerja.
         adb = AdbController(this) { line -> runOnUiThread { log(line) } }
@@ -118,6 +148,13 @@ class MainActivity : AppCompatActivity() {
             run("Connect") { doConnect(addr) }
         }
         btnDisconnect.setOnClickListener {
+            run("Disconnect") { doDisconnect() }
+        }
+        btnUsbScan.setOnClickListener { scanUsb(logResult = true) }
+        btnUsbConnect.setOnClickListener {
+            withUsbDevice { d -> run("Connect USB") { doConnectUsb(d) } }
+        }
+        btnUsbDisconnect.setOnClickListener {
             run("Disconnect") { doDisconnect() }
         }
         btnAddApk.setOnClickListener {
@@ -146,6 +183,20 @@ class MainActivity : AppCompatActivity() {
             run("Set Device Owner") { doSetOwner() }
         }
         btnAll.setOnClickListener {
+            if (usbMode) {
+                val list = apks.toList()
+                withUsbDevice { d ->
+                    run("Jalankan semua (USB)") {
+                        if (adb.isConnected && connectedAddr == usbLabel(d)) {
+                            runOnUiThread { log("[Connect USB] dilewati (sudah terhubung).") }
+                        } else if (!doConnectUsb(d)) {
+                            return@run false
+                        }
+                        adb.installAndOwner(list)
+                    }
+                }
+                return@setOnClickListener
+            }
             val pAddr = addr(edtPairIp.text.toString(), edtPairPort.text.toString())
             val pCode = clean(edtPairCode.text.toString())
             val cAddr = addr(edtConnIp.text.toString(), edtConnPort.text.toString())
@@ -186,13 +237,84 @@ class MainActivity : AppCompatActivity() {
             log("Log dibersihkan.")
         }
 
+        // Cabut/colok kabel USB → perbarui daftar device; bila device yang sedang dipakai dicabut, putuskan sesi.
+        val usbFilter = IntentFilter().apply {
+            addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED)
+            addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
+        }
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(usbReceiver, usbFilter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            registerReceiver(usbReceiver, usbFilter)
+        }
+
         refreshApkList()
         refreshHeader()
-        log("Isi IP dan Port lalu klik tombol.")
+        scanUsb(logResult = false)
+        log("Isi IP dan Port lalu klik tombol. Untuk kabel USB, pindah ke tab USB.")
+    }
+
+    private val usbReceiver = object : BroadcastReceiver() {
+        override fun onReceive(c: Context, i: Intent) {
+            if (i.action == UsbManager.ACTION_USB_DEVICE_DETACHED && usb.isOpen && usb.listAdbDevices().none { it.deviceId == usbDevice?.deviceId }) {
+                if (!busy) {
+                    usb.close()
+                    log("Kabel USB dicabut.")
+                }
+            }
+            scanUsb(logResult = false)
+        }
+    }
+
+    // ---------- Mode & USB ----------
+
+    private fun setMode(isUsb: Boolean) {
+        usbMode = isUsb
+        panelWireless.visibility = if (isUsb) View.GONE else View.VISIBLE
+        panelUsb.visibility = if (isUsb) View.VISIBLE else View.GONE
+        if (isUsb) scanUsb(logResult = false)
+        refreshHeader()
+    }
+
+    private fun usbLabel(d: UsbDevice) = "USB · ${d.productName ?: "device"}"
+
+    /** Cari device USB yang mengiklankan interface ADB dan tampilkan di kartu USB. */
+    private fun scanUsb(logResult: Boolean) {
+        val list = usb.listAdbDevices()
+        val d = list.firstOrNull { it.deviceId == usbDevice?.deviceId } ?: list.firstOrNull()
+        usbDevice = d
+        if (d == null) {
+            txtUsbDevice.text = "Belum ada device USB"
+            txtUsbDevice.setTextColor(getColor(R.color.muted))
+            if (logResult) log("Tidak ada device USB dengan USB debugging aktif. Cek kabel/OTG dan opsi USB debugging di HP target.")
+        } else {
+            val extra = if (list.size > 1) "  (+${list.size - 1} lainnya)" else ""
+            txtUsbDevice.text = usb.label(d) + extra
+            txtUsbDevice.setTextColor(getColor(R.color.text))
+            if (logResult) log("Device USB ditemukan: ${usb.label(d)}")
+        }
+    }
+
+    /** Pastikan ada device USB + izin pemakaian, lalu panggil [block] di UI thread. */
+    private fun withUsbDevice(block: (UsbDevice) -> Unit) {
+        if (busy) return
+        scanUsb(logResult = false)
+        val d = usbDevice
+        if (d == null) {
+            log("Tidak ada device USB dengan USB debugging aktif. Sambungkan kabel lalu klik Cari.")
+            return
+        }
+        if (usb.hasPermission(d)) { block(d); return }
+        log("Meminta izin akses USB... Setujui dialog di layar ini.")
+        usb.requestPermission(d) { granted ->
+            if (granted) block(d) else log("Izin USB ditolak.")
+        }
     }
 
     override fun onStart() {
         super.onStart()
+        if (::usb.isInitialized) scanUsb(logResult = false)
         pollTask?.cancel(false)
         pollTask = poller.scheduleWithFixedDelay({ pollConnection() }, 0, 1, TimeUnit.SECONDS)
     }
@@ -207,6 +329,8 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
         worker.shutdown()
         poller.shutdownNow()
+        try { unregisterReceiver(usbReceiver) } catch (_: Throwable) { }
+        usb.close()
     }
 
     // ---------- Status koneksi live ----------
@@ -247,7 +371,31 @@ class MainActivity : AppCompatActivity() {
         return ok
     }
 
+    private fun doConnectUsb(d: UsbDevice): Boolean {
+        val label = usbLabel(d)
+        val ok = try {
+            usb.open(d)
+            adb.connectUsb(usb)
+        } catch (e: Throwable) {
+            runOnUiThread { log("Gagal membuka USB: ${e.message ?: e.javaClass.simpleName}") }
+            false
+        }
+        if (ok) {
+            connectedAddr = label
+            connectedSince = System.currentTimeMillis()
+            lostAddr = null
+            lastProbe = connectedSince
+        } else {
+            usb.close()
+            connectedAddr = null
+            connectedSince = 0L
+        }
+        runOnUiThread { refreshHeader() }
+        return ok
+    }
+
     private fun doConnect(addr: String): Boolean {
+        usb.close()
         val ok = adb.connect(addr)
         if (ok) {
             connectedAddr = addr
@@ -265,6 +413,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun doDisconnect(): Boolean {
         val ok = adb.disconnect()
+        usb.close()
         if (ok) { connectedAddr = null; connectedSince = 0L; lostAddr = null }
         runOnUiThread { refreshHeader() }
         return ok
@@ -320,7 +469,8 @@ class MainActivity : AppCompatActivity() {
                 statusDot.backgroundTintList = ColorStateList.valueOf(Color.rgb(248, 113, 113))
             }
             else -> {
-                txtConn.text = "Belum terhubung · Pair lalu Connect untuk mulai"
+                txtConn.text = if (usbMode) "Belum terhubung · Sambungkan kabel USB lalu Connect USB"
+                               else "Belum terhubung · Pair lalu Connect untuk mulai"
                 statusDot.backgroundTintList = ColorStateList.valueOf(Color.rgb(148, 163, 184))
             }
         }

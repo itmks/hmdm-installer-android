@@ -5,6 +5,9 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
 
+    <!-- USB debugging: HP ini sebagai USB host. Tidak wajib agar APK tetap bisa dipasang di HP tanpa USB host. -->
+    <uses-feature android:name="android.hardware.usb.host" android:required="false" />
+
     <application
         android:name=".App"
         android:allowBackup="false"

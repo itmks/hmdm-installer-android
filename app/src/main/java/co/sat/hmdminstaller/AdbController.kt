@@ -116,6 +116,48 @@ class AdbController(context: Context, private val log: (String) -> Unit) {
         return ok
     }
 
+    /**
+     * Connect lewat USB: libadb tersambung ke jembatan lokal [UsbBridge] (127.0.0.1:port).
+     * Percobaan pertama biasanya memicu dialog "Izinkan USB debugging?" di HP target, jadi
+     * dicoba beberapa kali supaya user sempat menyetujuinya (centang "Selalu izinkan").
+     */
+    fun connectUsb(bridge: UsbBridge): Boolean {
+        if (!bridge.isOpen) {
+            log("USB belum dibuka. Pilih device USB terlebih dahulu.")
+            return false
+        }
+        if (isConnected) {
+            try { manager.disconnect() } catch (_: Throwable) { }
+        }
+        var ok = false
+        for (attempt in 1..3) {
+            if (ok) break
+            if (attempt > 1) {
+                log("Mencoba lagi ($attempt/3)...")
+                Thread.sleep(1500)
+            }
+            log("> adb connect (USB)")
+            if (attempt == 1) log("Jika muncul dialog \"Izinkan USB debugging?\" di HP target: centang \"Selalu izinkan\" lalu OK.")
+            try {
+                val port = bridge.startProxy()
+                val result: Any? = manager.connect("127.0.0.1", port)
+                if (result == false || !manager.isConnected) {
+                    log("Connect USB gagal: tidak terhubung")
+                } else if (probe()) {
+                    ok = true
+                    log("connected to USB")
+                } else {
+                    log("Connect USB gagal: device tidak menjawab (dialog USB debugging belum disetujui?)")
+                    try { manager.disconnect() } catch (_: Throwable) { }
+                }
+            } catch (e: Throwable) {
+                log("Connect USB gagal: ${e.message ?: e.javaClass.simpleName}")
+            }
+            if (!ok) bridge.stopProxy()
+        }
+        return ok
+    }
+
     fun disconnect(): Boolean {
         log("> adb disconnect")
         return try {

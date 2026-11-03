@@ -194,8 +194,19 @@ class AdbController(context: Context, private val log: (String) -> Unit) {
                 Thread.sleep(1500)
                 out = installTry(apk.file)
             }
+            if (!out.contains("Success", ignoreCase = true) && isTransient(out) && isConnected) {
+                // Jalur streaming ditutup device tanpa pesan (umum di HP dengan pembatasan install via USB).
+                // Coba jalur kedua: push ke /data/local/tmp + pm install, supaya pesan error aslinya terbaca.
+                log("Install streaming gagal tanpa pesan. Mencoba jalur alternatif (push + pm install)...")
+                out = installViaTmp(apk.file)
+            }
             out.lines().filter { it.isNotBlank() }.forEach { log(it.trim()) }
-            if (out.contains("Success", ignoreCase = true)) ok++ else failed.appendLine("  - ${apk.name}")
+            if (out.contains("Success", ignoreCase = true)) {
+                ok++
+            } else {
+                failed.appendLine("  - ${apk.name}")
+                hintFor(out)?.let { log("Petunjuk: $it") }
+            }
         }
         log("")
         log("Ringkasan install: $ok berhasil, ${apks.size - ok} gagal dari ${apks.size} APK.")
@@ -247,6 +258,60 @@ class AdbController(context: Context, private val log: (String) -> Unit) {
 
     private fun installTry(file: File): String =
         try { installOne(file) } catch (e: Throwable) { "Error: ${e.message ?: e.javaClass.simpleName}" }
+
+    /**
+     * Jalur alternatif: kirim APK ke /data/local/tmp lewat `exec:cat`, verifikasi ukuran, lalu
+     * `pm install -r`. Output pm (Success / Failure [INSTALL_FAILED_...]) selalu terbaca.
+     */
+    private fun installViaTmp(file: File): String {
+        val remote = "/data/local/tmp/hmdm_install.apk"
+        try {
+            val push = manager.openStream("exec:cat > $remote")
+            try {
+                val os = push.openOutputStream()
+                file.inputStream().use { input ->
+                    val buf = ByteArray(32 * 1024)
+                    while (true) {
+                        val n = input.read(buf)
+                        if (n < 0) break
+                        os.write(buf, 0, n)
+                    }
+                }
+                os.flush()
+            } finally {
+                try { push.close() } catch (_: Throwable) { }
+            }
+            Thread.sleep(800)
+            val size = shell("wc -c < $remote").trim()
+            if (size != file.length().toString()) {
+                return "Error: ukuran file di device ($size) berbeda dari ${file.length()} (transfer tidak lengkap)"
+            }
+            val out = shell("pm install -r $remote")
+            return if (out.isBlank()) "Error: pm install tidak mengembalikan output" else out
+        } catch (e: Throwable) {
+            return "Error: ${e.message ?: e.javaClass.simpleName}"
+        } finally {
+            try { shell("rm -f $remote") } catch (_: Throwable) { }
+        }
+    }
+
+    /** Terjemahan singkat kode error pm yang sering muncul. */
+    private fun hintFor(out: String): String? = when {
+        out.contains("USER_RESTRICTED", true) || out.contains("canceled by user", true) ->
+            "HP menolak install via USB. Aktifkan 'Install via USB' / 'USB debugging (Security settings)' di Developer options (Xiaomi/Oppo/Vivo), lalu setujui dialog di HP target."
+        out.contains("UPDATE_INCOMPATIBLE", true) || out.contains("SIGNATURES_DO_NOT_MATCH", true) ->
+            "Aplikasi yang sama sudah terpasang dengan tanda tangan berbeda. Uninstall dulu (pm uninstall) atau reset HP."
+        out.contains("OLDER_SDK", true) || out.contains("NO_MATCHING_ABIS", true) ->
+            "APK tidak cocok dengan versi Android / arsitektur HP target."
+        out.contains("VERIFICATION_FAILURE", true) ->
+            "Verifikasi Play Protect/vendor gagal. Matikan 'Verify apps over USB' atau Play Protect sementara."
+        out.contains("INSUFFICIENT_STORAGE", true) -> "Penyimpanan HP target penuh."
+        out.contains("INVALID_APK", true) || out.contains("PARSE_FAILED", true) ->
+            "File APK rusak atau tidak valid. Salin ulang file APK-nya."
+        out.contains("Stream closed", true) || out.contains("stream closed", true) ->
+            "HP menutup koneksi saat install. Lihat layar HP target (mungkin ada dialog izin) dan cek pembatasan install via USB."
+        else -> null
+    }
 
     /** Kegagalan tanpa pesan dari pm (stream putus), bukan penolakan install seperti INSTALL_FAILED_*. */
     private fun isTransient(out: String): Boolean =
